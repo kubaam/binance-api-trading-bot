@@ -34,3 +34,10 @@ python trading_bot_unified.py
 
 On Windows you can also run `start.bat`.
 
+## Dynamic Risk Management
+
+The bot now includes an optional self-adjusting risk mode. When enabled (the
+default), the position size risk percentage increases after a series of winning
+trades and decreases after losses, bounded by the limits defined in
+`RiskSettings`.
+
