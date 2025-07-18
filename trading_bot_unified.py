@@ -204,15 +204,27 @@ class StrategySettings(BaseSettings):
 
 
 class RiskSettings(BaseSettings):
-    max_risk_per_trade_pct: float = (
-        0.015  # Risk 1.5% of total portfolio value per trade
-    )
-    risk_reward_ratio: float = 2.0  # Aim for 2:1 reward to risk
+    """Configuration controlling position risk."""
+
+    # Base risk used when the bot starts. This will be adjusted dynamically
+    # if ``dynamic_risk`` is enabled.
+    initial_risk_per_trade_pct: float = 0.015
+
+    # Maximum and minimum bounds for the dynamic risk percentage.
+    max_risk_per_trade_pct: float = 0.03
+    min_risk_per_trade_pct: float = 0.005
+
+    # Reward to risk ratio for take-profit vs. stop-loss placement.
+    risk_reward_ratio: float = 2.0
     atr_period_risk: int = 14
-    atr_stop_multiplier: float = 2.0  # Set stop loss at 2x ATR
+    atr_stop_multiplier: float = 2.0
+
     enable_concentration_veto: bool = True
     correlation_threshold: float = 0.80
     correlation_matrix_update_interval_sec: int = 3600
+
+    # Enable self‑adjusting risk based on recent performance.
+    dynamic_risk: bool = True
 
 
 class AISettings(BaseSettings):
@@ -1301,6 +1313,10 @@ class PortfolioManager:
         self.total_value = config.trading.initial_cash_balance
         self.symbol_states: Dict[str, BotState] = {}
         self.open_trade_details: Dict[str, Dict] = {}
+        # Dynamic risk tracking
+        self.current_risk_pct = config.risk.initial_risk_per_trade_pct
+        self.wins = 0
+        self.losses = 0
         self._log = structlog.get_logger(self.__class__.__name__)
 
     async def on_signal_event(self, event: SignalEvent):
@@ -1348,7 +1364,7 @@ class PortfolioManager:
             )
             return
 
-        risk_amount_usd = self.total_value * self.config.risk.max_risk_per_trade_pct
+        risk_amount_usd = self.total_value * self.current_risk_pct
         position_size_usd = risk_amount_usd * 10
 
         if position_size_usd < self.exchange.get_min_notional(event.symbol):
@@ -1405,7 +1421,7 @@ class PortfolioManager:
             sl_price = (
                 price - (current_atr * self.config.risk.atr_stop_multiplier)
                 if current_atr > 0
-                else price * (1 - self.config.risk.max_risk_per_trade_pct)
+                else price * (1 - self.current_risk_pct)
             )
             tp_price = price + (price - sl_price) * self.config.risk.risk_reward_ratio
 
@@ -1460,6 +1476,7 @@ class PortfolioManager:
                 f"**P/L:** `${pnl:,.2f}`\n**Reason:** {reason}",
                 color=3447003 if pnl >= 0 else 15158332,
             )
+            self._update_dynamic_risk(pnl)
 
         self.symbol_states[symbol] = BotState.AWAITING_SIGNAL
         await self.update_and_log_portfolio_status()
@@ -1527,6 +1544,38 @@ class PortfolioManager:
             cash=f"${self.cash:.2f}",
             positions=len(self.positions),
         )
+
+    def _update_dynamic_risk(self, pnl: float):
+        """Adjust ``current_risk_pct`` based on recent trade performance."""
+        if not self.config.risk.dynamic_risk:
+            return
+
+        if pnl > 0:
+            self.wins += 1
+        else:
+            self.losses += 1
+
+        total = self.wins + self.losses
+        if total < 5:
+            return  # Need more data
+
+        win_rate = self.wins / total
+        old_risk = self.current_risk_pct
+        if win_rate > 0.6:
+            self.current_risk_pct = min(
+                self.current_risk_pct * 1.1, self.config.risk.max_risk_per_trade_pct
+            )
+        elif win_rate < 0.4:
+            self.current_risk_pct = max(
+                self.current_risk_pct * 0.9, self.config.risk.min_risk_per_trade_pct
+            )
+        if old_risk != self.current_risk_pct:
+            self._log.info(
+                "Risk level adjusted",
+                old=f"{old_risk:.4f}",
+                new=f"{self.current_risk_pct:.4f}",
+                win_rate=f"{win_rate:.2f}",
+            )
 
 
 # ==============================================================================
