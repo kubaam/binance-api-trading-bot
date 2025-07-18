@@ -1653,7 +1653,15 @@ async def _aiohttp_session_provider() -> AsyncGenerator[aiohttp.ClientSession, N
 async def _binance_client_provider(
     config: BotSettings,
 ) -> AsyncGenerator[AsyncClient, None]:
-    client = await AsyncClient.create(config.api.binance_key, config.api.binance_secret)
+    log = structlog.get_logger("BinanceClientProvider")
+    try:
+        client = await AsyncClient.create(
+            config.api.binance_key,
+            config.api.binance_secret,
+        )
+    except Exception as e:
+        log.critical("Failed to initialize Binance client", error=str(e))
+        raise
     try:
         yield client
     finally:
