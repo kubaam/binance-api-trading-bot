@@ -41,3 +41,10 @@ default), the position size risk percentage increases after a series of winning
 trades and decreases after losses, bounded by the limits defined in
 `RiskSettings`.
 
+## Troubleshooting
+
+If the bot exits with a `TimeoutError` during startup, it usually means the
+Binance API could not be reached. Verify that your network connection allows
+outbound HTTPS requests to `api.binance.com` and try again. Some environments may
+require a proxy or VPN to access the API.
+
