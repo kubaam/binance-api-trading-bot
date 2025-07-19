@@ -1274,7 +1274,7 @@ class StrategyHandler:
                         / market_data_for_regime["close"].shift(1)
                     ) - 1
                     log_returns = returns.log1p()
-                    volatility = log_returns.rolling_std(window=21)
+                    volatility = log_returns.rolling_std(window_size=21)
                     features_df = pl.DataFrame(
                         {"log_returns": log_returns, "volatility": volatility}
                     ).drop_nulls()
