@@ -328,7 +328,8 @@ class ConfigManager:
                 self.log.error("Failed to load config.json, using defaults", error=e)
         cfg = BotSettings()
         try:
-            data = cfg.model_dump()
+            # Use JSON mode so Path objects are converted to strings
+            data = cfg.model_dump(mode="json")
             data.pop("api", None)
             with self.path.open("w") as f:
                 json.dump(data, f, indent=2)
@@ -339,7 +340,8 @@ class ConfigManager:
 
     def save(self, *_):
         try:
-            data = self.config.model_dump()
+            # Use JSON mode so Path objects are converted to strings
+            data = self.config.model_dump(mode="json")
             data.pop("api", None)
             with self.path.open("w") as f:
                 json.dump(data, f, indent=2)
