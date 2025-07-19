@@ -327,7 +327,14 @@ class ConfigManager:
             except Exception as e:
                 self.log.error("Failed to load config.json, using defaults", error=e)
         cfg = BotSettings()
-        self.save(cfg)
+        try:
+            data = cfg.model_dump()
+            data.pop("api", None)
+            with self.path.open("w") as f:
+                json.dump(data, f, indent=2)
+            self.last_mtime = self.path.stat().st_mtime
+        except Exception as e:
+            self.log.error("Failed to write default config.json", error=e)
         return cfg
 
     def save(self, *_):
