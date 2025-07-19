@@ -54,6 +54,14 @@ restarts its market data streams if the list of symbols has changed. This
 keeps the strategy focused on the most liquid markets without manual
 intervention.
 
+## Market Regime Detection
+
+The bot trains a Hidden Markov Model (HMM) to categorize market regimes.
+Training now uses historical data from several tickers by default
+(`BTCUSDC`, `ETHUSDC` and `BNBUSDC`) for a more robust model. You can
+override this list with the `REGIME_TRAINING_TICKERS` environment
+variable.
+
 ## Troubleshooting
 
 If the bot exits with a `TimeoutError` during startup, it usually means the
