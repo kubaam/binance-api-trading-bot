@@ -1,0 +1,67 @@
+{
+  "version": "8.6-Fixed",
+  "log_level": "INFO",
+  "is_production": false,
+  "db_path": "data/trades_v8.db",
+  "correlation_matrix_path": "data/correlation_matrix_v8.pkl",
+  "concurrent_api_calls": 10,
+  "api_timeout_seconds": 15,
+  "api_max_retries": 5,
+  "api_backoff_factor": 1.5,
+  "position_manage_interval_sec": 15,
+  "symbol_refresh_interval_sec": 600,
+  "portfolio_status_interval_sec": 60,
+  "trading": {
+    "quote_asset": "USDC",
+    "interval": "15m",
+    "top_n_symbols": 100,
+    "max_active_positions": 50,
+    "initial_cash_balance": 1000.0,
+    "trading_mode": "PAPER"
+  },
+  "strategy": {
+    "data_fetch_limit": 750,
+    "min_candles_for_analysis": 200,
+    "signal_consensus_threshold": 1,
+    "rsi_period": 14,
+    "rsi_oversold": 30,
+    "rsi_overbought": 70,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "ichimoku_tenkan": 9,
+    "ichimoku_kijun": 26,
+    "ichimoku_senkou_b": 52
+  },
+  "risk": {
+    "initial_risk_per_trade_pct": 0.015,
+    "max_risk_per_trade_pct": 0.025,
+    "min_risk_per_trade_pct": 0.01,
+    "risk_reward_ratio": 2.0,
+    "atr_period_risk": 14,
+    "atr_stop_multiplier": 2.0,
+    "enable_concentration_veto": true,
+    "correlation_threshold": 0.8,
+    "correlation_matrix_update_interval_sec": 3600,
+    "dynamic_risk": true
+  },
+  "ai": {
+    "enable_ai_decider": true,
+    "min_ai_confidence_score": 0.6
+  },
+  "regime": {
+    "enabled": true,
+    "model_path": "data/market_regime_hmm.joblib",
+    "training_ticker": "BTCUSDC",
+    "training_tickers": [
+      "BTCUSDC",
+      "ETHUSDC",
+      "BNBUSDC"
+    ],
+    "hmm_training_days": 2000,
+    "high_risk_regimes": [
+      "Bearish Volatile"
+    ],
+    "retraining_interval_sec": 86400
+  }
+}

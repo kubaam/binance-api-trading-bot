@@ -11,6 +11,7 @@ import random
 import csv
 import signal
 import time
+import contextlib
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from typing import (
@@ -162,13 +163,46 @@ log = structlog.get_logger("TradingBotV8.5-Final")
 # ==============================================================================
 
 
+class ObservableSettings(BaseSettings):
+    """Base settings class that triggers a callback on any attribute change."""
+
+    def __init__(self, **data: Any):
+        super().__init__(**data)
+        object.__setattr__(self, "_change_callback", None)
+        object.__setattr__(self, "_in_update", False)
+
+    def set_change_callback(self, callback):
+        object.__setattr__(self, "_change_callback", callback)
+        for v in self.__dict__.values():
+            if isinstance(v, ObservableSettings):
+                v.set_change_callback(callback)
+
+    def begin_update(self):
+        object.__setattr__(self, "_in_update", True)
+        for v in self.__dict__.values():
+            if isinstance(v, ObservableSettings):
+                v.begin_update()
+
+    def end_update(self):
+        for v in self.__dict__.values():
+            if isinstance(v, ObservableSettings):
+                v.end_update()
+        object.__setattr__(self, "_in_update", False)
+
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        cb = getattr(self, "_change_callback", None)
+        if cb and not getattr(self, "_in_update", False):
+            cb()
+
+
 class StrategyType(str, Enum):
     TREND_MACD = "TREND_MACD"
     MEAN_REVERSION_RSI = "MEAN_REVERSION_RSI"
     ICHIMOKU_BREAKOUT = "ICHIMOKU_BREAKOUT"
 
 
-class ApiSettings(BaseSettings):
+class ApiSettings(ObservableSettings):
     binance_key: str = "YOUR_BINANCE_API_KEY"
     binance_secret: str = "YOUR_BINANCE_SECRET_KEY"
     openai_api_key: str = "YOUR_OPENAI_API_KEY"
@@ -178,7 +212,7 @@ class ApiSettings(BaseSettings):
     )
 
 
-class TradingSettings(BaseSettings):
+class TradingSettings(ObservableSettings):
     quote_asset: str = "USDC"
     interval: str = "15m"
     top_n_symbols: int = 100
@@ -187,7 +221,7 @@ class TradingSettings(BaseSettings):
     trading_mode: str = "PAPER"  # 'LIVE' or 'PAPER'
 
 
-class StrategySettings(BaseSettings):
+class StrategySettings(ObservableSettings):
     model_config = SettingsConfigDict(env_prefix="STRATEGY_")
     data_fetch_limit: int = 750
     min_candles_for_analysis: int = 200
@@ -203,7 +237,7 @@ class StrategySettings(BaseSettings):
     ichimoku_senkou_b: int = 52
 
 
-class RiskSettings(BaseSettings):
+class RiskSettings(ObservableSettings):
     """Configuration controlling position risk."""
 
     # Base risk used when the bot starts. This will be adjusted dynamically
@@ -227,12 +261,12 @@ class RiskSettings(BaseSettings):
     dynamic_risk: bool = True
 
 
-class AISettings(BaseSettings):
+class AISettings(ObservableSettings):
     enable_ai_decider: bool = True
     min_ai_confidence_score: float = 0.60
 
 
-class RegimeSettings(BaseSettings):
+class RegimeSettings(ObservableSettings):
     """New settings for the Market Regime Detector."""
 
     enabled: bool = True
@@ -248,7 +282,7 @@ class RegimeSettings(BaseSettings):
     retraining_interval_sec: int = 86400  # Retrain every 24 hours
 
 
-class BotSettings(BaseSettings):
+class BotSettings(ObservableSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
@@ -270,6 +304,84 @@ class BotSettings(BaseSettings):
     risk: RiskSettings = RiskSettings()
     ai: AISettings = AISettings()
     regime: RegimeSettings = RegimeSettings()
+
+
+class ConfigManager:
+    """Loads, watches and persists bot settings from a JSON file."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.log = structlog.get_logger(self.__class__.__name__)
+        self.config = self._load_or_create()
+        self.config.set_change_callback(self.save)
+        self.last_mtime = self.path.stat().st_mtime if self.path.exists() else 0
+        self._watch_task: Optional[asyncio.Task] = None
+
+    def _load_or_create(self) -> BotSettings:
+        if self.path.exists():
+            try:
+                with self.path.open() as f:
+                    data = json.load(f)
+                data.pop("api", None)
+                return BotSettings.model_validate(data)
+            except Exception as e:
+                self.log.error("Failed to load config.json, using defaults", error=e)
+        cfg = BotSettings()
+        self.save(cfg)
+        return cfg
+
+    def save(self, *_):
+        try:
+            data = self.config.model_dump()
+            data.pop("api", None)
+            with self.path.open("w") as f:
+                json.dump(data, f, indent=2)
+            self.last_mtime = self.path.stat().st_mtime
+        except Exception as e:
+            self.log.error("Failed to write config.json", error=e)
+
+    async def _watch_loop(self, interval: int = 1):
+        while not SHUTDOWN_EVENT.is_set():
+            try:
+                if self.path.exists():
+                    mtime = self.path.stat().st_mtime
+                    if mtime != self.last_mtime:
+                        self.log.info("Reloading configuration from file")
+                        with self.path.open() as f:
+                            data = json.load(f)
+                        data.pop("api", None)
+                        new_cfg = BotSettings.model_validate(data)
+                        self.config.begin_update()
+                        try:
+                            self._apply_updates(self.config, new_cfg)
+                        finally:
+                            self.config.end_update()
+                        self.last_mtime = mtime
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.log.error("Error watching config file", error=e)
+
+    def _apply_updates(self, current: ObservableSettings, new: ObservableSettings):
+        for name in current.model_fields:
+            cur_val = getattr(current, name)
+            new_val = getattr(new, name)
+            if isinstance(cur_val, ObservableSettings):
+                self._apply_updates(cur_val, new_val)
+            else:
+                if cur_val != new_val:
+                    setattr(current, name, new_val)
+
+    def start_watch(self, interval: int = 1):
+        if self._watch_task is None:
+            self._watch_task = asyncio.create_task(self._watch_loop(interval))
+
+    async def stop_watch(self):
+        if self._watch_task:
+            self._watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._watch_task
 
 
 # --- Event-Driven Architecture (EDA) Core Components ---
@@ -1703,7 +1815,8 @@ async def _binance_client_provider(
 
 
 class AppContainer(containers.DeclarativeContainer):
-    config = providers.Singleton(BotSettings)
+    config_manager = providers.Singleton(ConfigManager, Path("config.json"))
+    config = providers.Singleton(lambda cm: cm.config, config_manager)
     aiohttp_session = providers.Resource(_aiohttp_session_provider)
     binance_client = providers.Resource(_binance_client_provider, config=config)
     exchange = providers.Singleton(
@@ -1863,6 +1976,7 @@ async def refresh_symbol_list(
 @inject
 async def start_bot(
     config: BotSettings = Provide[AppContainer.config],
+    config_manager: ConfigManager = Provide[AppContainer.config_manager],
     exchange: ExchangeService = Provide[AppContainer.exchange],
     persistence: PersistenceService = Provide[AppContainer.persistence],
     portfolio_manager: PortfolioManager = Provide[AppContainer.portfolio_manager],
@@ -1878,7 +1992,7 @@ async def start_bot(
     def handle_signal(sig):
         log.warning(f"Received signal {sig}. Initiating graceful shutdown.")
         if not SHUTDOWN_EVENT.is_set():
-            asyncio.create_task(graceful_shutdown(loop, notifier))
+            asyncio.create_task(graceful_shutdown(loop, notifier, config_manager))
 
     if sys.platform != "win32":
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -1886,6 +2000,7 @@ async def start_bot(
 
     try:
         log.info("🚀 LAUNCHING BOT SERVICES")
+        config_manager.start_watch()
         await exchange.initialize()
         await persistence.initialize()
         # Initialize regime detector after exchange service is ready
@@ -1972,10 +2087,14 @@ async def start_bot(
         )
     finally:
         if not SHUTDOWN_EVENT.is_set():
-            await graceful_shutdown(loop, notifier)
+            await graceful_shutdown(loop, notifier, config_manager)
 
 
-async def graceful_shutdown(loop: asyncio.AbstractEventLoop, notifier: Notifier):
+async def graceful_shutdown(
+    loop: asyncio.AbstractEventLoop,
+    notifier: Notifier,
+    config_manager: ConfigManager,
+):
     if SHUTDOWN_EVENT.is_set():
         return
     log.warning(
@@ -1992,6 +2111,7 @@ async def graceful_shutdown(loop: asyncio.AbstractEventLoop, notifier: Notifier)
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
 
+    await config_manager.stop_watch()
     await container.shutdown_resources()
     log.info(f"{Fore.GREEN}✅ Shutdown complete.")
 
@@ -1999,7 +2119,8 @@ async def graceful_shutdown(loop: asyncio.AbstractEventLoop, notifier: Notifier)
 if __name__ == "__main__":
     container = AppContainer()
     try:
-        cfg = container.config()
+        cfg_manager = container.config_manager()
+        cfg = cfg_manager.config
         container.wire(modules=[__name__])
     except Exception as e:
         # V případě chyby v konfiguraci je logging ještě nenastavený, použijeme print
