@@ -208,10 +208,10 @@ class RiskSettings(BaseSettings):
 
     # Base risk used when the bot starts. This will be adjusted dynamically
     # if ``dynamic_risk`` is enabled.
-    initial_risk_per_trade_pct: float = 0.02
+    initial_risk_per_trade_pct: float = 0.015
 
     # Maximum and minimum bounds for the dynamic risk percentage.
-    max_risk_per_trade_pct: float = 0.03
+    max_risk_per_trade_pct: float = 0.025
     min_risk_per_trade_pct: float = 0.01
 
     # Reward to risk ratio for take-profit vs. stop-loss placement.
@@ -925,6 +925,21 @@ class DataHandler:
             await asyncio.gather(market_loop(), user_loop())
 
         self.main_socket_task = asyncio.create_task(combined_stream_loop())
+
+    async def refresh_streams(self, symbols: List[str]):
+        """Restart streams if the symbol list changes."""
+        if set(symbols) == set(self.symbols):
+            return
+        self._log.info(
+            f"Refreshing data streams with {len(symbols)} symbols."
+        )
+        if self.main_socket_task:
+            self.main_socket_task.cancel()
+            try:
+                await self.main_socket_task
+            except asyncio.CancelledError:
+                pass
+        self.start_streams(symbols)
 
 
 class AIAnalysisManager:
@@ -1814,6 +1829,24 @@ async def periodic_hmm_retraining(
         )
 
 
+async def refresh_symbol_list(
+    exchange: ExchangeService,
+    data_handler: DataHandler,
+    config: BotSettings,
+) -> None:
+    """Fetches top symbols and updates data streams if needed."""
+    try:
+        new_symbols = await exchange.get_top_symbols(
+            config.trading.quote_asset, config.trading.top_n_symbols
+        )
+        regime_ticker = config.regime.training_ticker
+        if regime_ticker not in new_symbols:
+            new_symbols.append(regime_ticker)
+        await data_handler.refresh_streams(new_symbols)
+    except Exception as e:
+        log.error("Failed to refresh symbol list", error=str(e))
+
+
 @inject
 async def start_bot(
     config: BotSettings = Provide[AppContainer.config],
@@ -1886,6 +1919,16 @@ async def start_bot(
                     portfolio_manager.update_and_log_portfolio_status,
                     config.portfolio_status_interval_sec,
                     "Portfolio Status",
+                )
+            ),
+            asyncio.create_task(
+                periodic_task_loop(
+                    refresh_symbol_list,
+                    config.symbol_refresh_interval_sec,
+                    "Symbol Refresh",
+                    exchange,
+                    data_handler,
+                    config,
                 )
             ),
         ]
