@@ -47,6 +47,13 @@ Open positions automatically use a trailing stop that moves up as the price
 increases. The trailing distance is equal to the initial risk amount,
 allowing profits to be locked in while letting winners run.
 
+## Automatic Symbol Refresh
+
+Every 10 minutes the bot fetches the top trading pairs by volume and
+restarts its market data streams if the list of symbols has changed. This
+keeps the strategy focused on the most liquid markets without manual
+intervention.
+
 ## Troubleshooting
 
 If the bot exits with a `TimeoutError` during startup, it usually means the
