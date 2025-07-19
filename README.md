@@ -41,6 +41,12 @@ default), the position size risk percentage increases after a series of winning
 trades and decreases after losses, bounded by the limits defined in
 `RiskSettings`.
 
+## Trailing Stops
+
+Open positions automatically use a trailing stop that moves up as the price
+increases. The trailing distance is equal to the initial risk amount,
+allowing profits to be locked in while letting winners run.
+
 ## Troubleshooting
 
 If the bot exits with a `TimeoutError` during startup, it usually means the

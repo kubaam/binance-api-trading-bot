@@ -208,11 +208,11 @@ class RiskSettings(BaseSettings):
 
     # Base risk used when the bot starts. This will be adjusted dynamically
     # if ``dynamic_risk`` is enabled.
-    initial_risk_per_trade_pct: float = 0.015
+    initial_risk_per_trade_pct: float = 0.02
 
     # Maximum and minimum bounds for the dynamic risk percentage.
     max_risk_per_trade_pct: float = 0.03
-    min_risk_per_trade_pct: float = 0.005
+    min_risk_per_trade_pct: float = 0.01
 
     # Reward to risk ratio for take-profit vs. stop-loss placement.
     risk_reward_ratio: float = 2.0
@@ -1495,6 +1495,10 @@ class PortfolioManager:
             if current_price is None:
                 continue
 
+            risk_distance = pos.entry_price - pos.stop_loss_price
+            if current_price - risk_distance > pos.trailing_stop_price:
+                pos.trailing_stop_price = current_price - risk_distance
+
             if exit_reason := self._check_exit_conditions(pos, current_price):
                 await self.create_exit_order(symbol, reason=exit_reason)
 
@@ -1505,6 +1509,8 @@ class PortfolioManager:
             return f"Take-Profit hit at {pos.take_profit_price:.4f}"
         if current_price <= pos.stop_loss_price:
             return f"Stop-Loss hit at {pos.stop_loss_price:.4f}"
+        if current_price <= pos.trailing_stop_price:
+            return f"Trailing stop hit at {pos.trailing_stop_price:.4f}"
         return None
 
     async def create_exit_order(self, symbol: str, reason: str):
