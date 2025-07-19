@@ -11,12 +11,6 @@
   "position_manage_interval_sec": 15,
   "symbol_refresh_interval_sec": 600,
   "portfolio_status_interval_sec": 60,
-  "api": {
-    "binance_key": "YOUR_BINANCE_API_KEY",
-    "binance_secret": "YOUR_BINANCE_SECRET_KEY",
-    "openai_api_key": "YOUR_OPENAI_API_KEY",
-    "discord_webhook_url": "YOUR_DISCORD_WEBHOOK_URL"
-  },
   "trading": {
     "quote_asset": "USDC",
     "interval": "15m",

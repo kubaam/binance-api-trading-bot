@@ -322,6 +322,7 @@ class ConfigManager:
             try:
                 with self.path.open() as f:
                     data = json.load(f)
+                data.pop("api", None)
                 return BotSettings.model_validate(data)
             except Exception as e:
                 self.log.error("Failed to load config.json, using defaults", error=e)
@@ -331,8 +332,10 @@ class ConfigManager:
 
     def save(self, *_):
         try:
+            data = self.config.model_dump()
+            data.pop("api", None)
             with self.path.open("w") as f:
-                json.dump(self.config.model_dump(), f, indent=2)
+                json.dump(data, f, indent=2)
             self.last_mtime = self.path.stat().st_mtime
         except Exception as e:
             self.log.error("Failed to write config.json", error=e)
@@ -346,6 +349,7 @@ class ConfigManager:
                         self.log.info("Reloading configuration from file")
                         with self.path.open() as f:
                             data = json.load(f)
+                        data.pop("api", None)
                         new_cfg = BotSettings.model_validate(data)
                         self.config.begin_update()
                         try:

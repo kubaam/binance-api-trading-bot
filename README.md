@@ -23,6 +23,9 @@ DISCORD_WEBHOOK_URL="your_discord_webhook"
 ```
 
 A sample file is provided as `.env.sample`.
+All other settings are loaded from `config.json` and changes to that file are
+applied on the fly. Keep your API keys only in `.env`; they are never written
+back to `config.json`.
 
 ## Running
 
