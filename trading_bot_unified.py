@@ -237,7 +237,12 @@ class RegimeSettings(BaseSettings):
 
     enabled: bool = True
     model_path: Path = Path("data/market_regime_hmm.joblib")
-    training_ticker: str = "BTCUSDC"  # Use a Binance-compatible ticker now
+    # Primary ticker used for real-time regime prediction
+    training_ticker: str = "BTCUSDC"
+    # Additional tickers to include when training the HMM model
+    training_tickers: List[str] = Field(
+        default_factory=lambda: ["BTCUSDC", "ETHUSDC", "BNBUSDC"]
+    )
     hmm_training_days: int = 2000  # ~5.5 years of daily data for training
     high_risk_regimes: List[str] = field(default_factory=lambda: ["Bearish Volatile"])
     retraining_interval_sec: int = 86400  # Retrain every 24 hours
@@ -369,42 +374,50 @@ class MarketRegimeDetector:
         """
         self._log.info("--- Starting HMM Model Training ---")
         try:
-            ticker = self.config.training_ticker
+            tickers = self.config.training_tickers or [self.config.training_ticker]
             self._log.info(
                 f"Fetching {self.config.hmm_training_days} days of historical data for HMM training.",
-                ticker=ticker,
+                tickers=tickers,
             )
 
-            # Fetch daily data from Binance
-            data = await self.exchange.fetch_klines(
-                symbol=ticker,
-                interval=KLINE_INTERVAL_1DAY,
-                limit=self.config.hmm_training_days,
-            )
+            all_features = []
+            for ticker in tickers:
+                self._log.info("Fetching data for HMM training", ticker=ticker)
 
-            if data.is_empty() or data.height < 100:
-                raise IOError(
-                    f"Not enough historical data for {ticker} from Binance. Received {data.height} rows."
+                data = await self.exchange.fetch_klines(
+                    symbol=ticker,
+                    interval=KLINE_INTERVAL_1DAY,
+                    limit=self.config.hmm_training_days,
                 )
 
-            # Calculate features using Polars
-            returns = (data["close"] / data["close"].shift(1)) - 1
-            log_returns = returns.log1p()
-            volatility = log_returns.rolling_std(window_size=21)
+                if data.is_empty() or data.height < 100:
+                    raise IOError(
+                        f"Not enough historical data for {ticker} from Binance. Received {data.height} rows."
+                    )
 
-            # Create features DataFrame and drop nulls
-            features_df = pl.DataFrame(
-                {"log_returns": log_returns, "volatility": volatility}
-            ).drop_nulls()
+                returns = (data["close"] / data["close"].shift(1)) - 1
+                log_returns = returns.log1p()
+                volatility = log_returns.rolling_std(window_size=21)
 
-            features = features_df.to_numpy()
+                features_df = pl.DataFrame(
+                    {"log_returns": log_returns, "volatility": volatility}
+                ).drop_nulls()
 
-            if len(features) < 100:
-                raise IOError(
-                    f"Not enough feature data points after calculation for {ticker}. Have {len(features)} points."
-                )
+                feat = features_df.to_numpy()
 
-            self._log.info(f"Prepared {len(features)} data points for training.")
+                if len(feat) < 100:
+                    raise IOError(
+                        f"Not enough feature data points after calculation for {ticker}. Have {len(feat)} points."
+                    )
+
+                self._log.info(
+                    f"Prepared {len(feat)} data points for {ticker}.")
+                all_features.append(feat)
+
+            features = np.vstack(all_features)
+
+            self._log.info(
+                f"Total concatenated feature points: {len(features)}")
             self._log.info("Training GaussianHMM with 3 components...")
             model = GaussianHMM(
                 n_components=3,
