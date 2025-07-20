@@ -2172,7 +2172,6 @@ if __name__ == "__main__":
     while True:
         try:
             asyncio.run(start_bot())
-            break
         except (KeyboardInterrupt, SystemExit):
             log.info("Bot stopped by user or system.")
             break
@@ -2185,6 +2184,11 @@ if __name__ == "__main__":
             SHUTDOWN_EVENT.clear()
             time.sleep(5)
             log.info("Restarting bot after unexpected error...")
+            continue
+        else:
+            SHUTDOWN_EVENT.clear()
+            log.warning("Bot exited and will be restarted automatically.")
+            time.sleep(5)
             continue
 
     # Ensure logs flush on exit
