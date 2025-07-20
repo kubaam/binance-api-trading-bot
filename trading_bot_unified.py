@@ -1468,6 +1468,24 @@ class PortfolioManager:
         self.losses = 0
         self._log = structlog.get_logger(self.__class__.__name__)
 
+    def _calculate_atr(self, df: pl.DataFrame, period: int) -> float:
+        """Return the latest ATR value using basic calculations."""
+        if df.height < period + 1:
+            raise ValueError("Not enough data for ATR")
+        prev_close = df["close"].shift(1)
+        tr = (
+            pl.select(
+                pl.max_horizontal(
+                    df["high"] - df["low"],
+                    (df["high"] - prev_close).abs(),
+                    (df["low"] - prev_close).abs(),
+                )
+            )
+            .to_series()
+            .rolling_mean(period)
+        )
+        return float(tr.drop_nulls().to_list()[-1])
+
     async def on_signal_event(self, event: SignalEvent):
         symbol = event.symbol
         current_regime = event.details.get("market_regime", "UNKNOWN")
@@ -1555,16 +1573,14 @@ class PortfolioManager:
             current_atr = 0.0
             if df_hist is not None and not df_hist.is_empty():
                 try:
-                    atr_series = plta.atr(
-                        df_hist["high"],
-                        df_hist["low"],
-                        df_hist["close"],
-                        timeperiod=self.config.risk.atr_period_risk,
+                    current_atr = self._calculate_atr(
+                        df_hist, self.config.risk.atr_period_risk
                     )
-                    current_atr = atr_series.drop_nulls().last()
                 except Exception as e:
                     self._log.warning(
-                        "Could not calculate ATR for stop-loss.", symbol=symbol, error=e
+                        "Could not calculate ATR for stop-loss.",
+                        symbol=symbol,
+                        error=e,
                     )
 
             sl_price = (
@@ -2153,16 +2169,24 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    try:
-        asyncio.run(start_bot())
-    except (KeyboardInterrupt, SystemExit):
-        log.info("Bot stopped by user or system.")
-    except Exception as e:
-        log.critical(
-            "Unhandled exception in main execution block.", error=str(e), exc_info=True
-        )
-    finally:
-        # TOTO JE KLÍČOVÁ OPRAVA
-        # Zajistí, že se všechny logy správně zapíší a uzavřou před ukončením programu.
-        log.info("Flushing logs and shutting down logging system.")
-        logging.shutdown()
+    while True:
+        try:
+            asyncio.run(start_bot())
+            break
+        except (KeyboardInterrupt, SystemExit):
+            log.info("Bot stopped by user or system.")
+            break
+        except Exception as e:
+            log.critical(
+                "Unhandled exception in main execution block.",
+                error=str(e),
+                exc_info=True,
+            )
+            SHUTDOWN_EVENT.clear()
+            time.sleep(5)
+            log.info("Restarting bot after unexpected error...")
+            continue
+
+    # Ensure logs flush on exit
+    log.info("Flushing logs and shutting down logging system.")
+    logging.shutdown()
