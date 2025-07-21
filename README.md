@@ -11,6 +11,8 @@ You can install them using:
 pip install -r requirements.txt
 ```
 
+For optimal performance the bot uses `uvloop` as the event loop when available.
+
 ## Configuration
 
 Create a `.env` file in the repository root with your API keys:

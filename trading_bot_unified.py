@@ -1,5 +1,6 @@
 # --- Standard & Third-Party Library Imports ---
 import asyncio
+import uvloop
 import json
 import logging
 import math
@@ -67,6 +68,9 @@ from colorama import Fore, Style, init
 
 # Initialize Colorama for colored console output
 init(autoreset=True)
+
+# Use uvloop for improved asyncio performance
+uvloop.install()
 
 
 class SafeFileHandler(logging.FileHandler):
@@ -1310,11 +1314,14 @@ class StrategyHandler:
         self._log.info("StrategyHandler is ready with initial data.")
 
     def _calculate_all_indicators(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Return TA indicators using a lazy Polars pipeline for better performance."""
         s = self.config
         try:
             if df.height < s.ichimoku_senkou_b:
                 return pl.DataFrame()
-            df = df.with_columns(
+
+            lf = df.lazy()
+            lf = lf.with_columns(
                 plta.rsi(pl.col("close"), timeperiod=s.rsi_period).alias(
                     f"rsi_{s.rsi_period}"
                 ),
@@ -1325,20 +1332,23 @@ class StrategyHandler:
                     signalperiod=s.macd_signal,
                 ).struct.unnest(),
             )
-            tenkan_high, tenkan_low = pl.col("high").rolling_max(
-                s.ichimoku_tenkan
-            ), pl.col("low").rolling_min(s.ichimoku_tenkan)
-            df = df.with_columns(
+
+            tenkan_high = pl.col("high").rolling_max(s.ichimoku_tenkan)
+            tenkan_low = pl.col("low").rolling_min(s.ichimoku_tenkan)
+            lf = lf.with_columns(
                 ((tenkan_high + tenkan_low) / 2).alias(
                     f"tenkan_sen_{s.ichimoku_tenkan}"
                 )
             )
-            kijun_high, kijun_low = pl.col("high").rolling_max(
-                s.ichimoku_kijun
-            ), pl.col("low").rolling_min(s.ichimoku_kijun)
-            df = df.with_columns(
-                ((kijun_high + kijun_low) / 2).alias(f"kijun_sen_{s.ichimoku_kijun}")
+
+            kijun_high = pl.col("high").rolling_max(s.ichimoku_kijun)
+            kijun_low = pl.col("low").rolling_min(s.ichimoku_kijun)
+            lf = lf.with_columns(
+                ((kijun_high + kijun_low) / 2).alias(
+                    f"kijun_sen_{s.ichimoku_kijun}"
+                )
             )
+
             senkou_a = (
                 (
                     pl.col(f"tenkan_sen_{s.ichimoku_tenkan}")
@@ -1346,19 +1356,23 @@ class StrategyHandler:
                 )
                 / 2
             ).shift(-s.ichimoku_kijun)
-            df = df.with_columns(
+            lf = lf.with_columns(
                 senkou_a.alias(
                     f"senkou_a_{s.ichimoku_tenkan}_{s.ichimoku_kijun}_{s.ichimoku_senkou_b}"
                 )
             )
-            senkou_b_high, senkou_b_low = pl.col("high").rolling_max(
-                s.ichimoku_senkou_b
-            ), pl.col("low").rolling_min(s.ichimoku_senkou_b)
-            senkou_b = ((senkou_b_high + senkou_b_low) / 2).shift(-s.ichimoku_kijun)
-            df = df.with_columns(
-                senkou_b.alias(f"senkou_b_{s.ichimoku_kijun}_{s.ichimoku_senkou_b}")
+
+            senkou_b_high = pl.col("high").rolling_max(s.ichimoku_senkou_b)
+            senkou_b_low = pl.col("low").rolling_min(s.ichimoku_senkou_b)
+            senkou_b = (senkou_b_high + senkou_b_low) / 2
+            senkou_b = senkou_b.shift(-s.ichimoku_kijun)
+            lf = lf.with_columns(
+                senkou_b.alias(
+                    f"senkou_b_{s.ichimoku_kijun}_{s.ichimoku_senkou_b}"
+                )
             )
-            return df.drop_nulls()
+
+            return lf.drop_nulls().collect()
         except Exception as e:
             self._log.error(
                 "Indicator calculation failed", error=str(e), exc_info=False

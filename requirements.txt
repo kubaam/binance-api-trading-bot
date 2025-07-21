@@ -16,4 +16,5 @@ dependency-injector
 colorama
 aiohttp
 joblib
+uvloop
 
