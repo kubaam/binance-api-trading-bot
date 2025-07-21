@@ -47,7 +47,9 @@ from binance.enums import (
     SIDE_SELL,
 )
 from binance.exceptions import BinanceAPIException, BinanceRequestException
-from openai import OpenAI
+from openai import AsyncOpenAI
+import hashlib
+from collections import OrderedDict
 from rich.logging import RichHandler
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -531,14 +533,12 @@ class MarketRegimeDetector:
                         f"Not enough feature data points after calculation for {ticker}. Have {len(feat)} points."
                     )
 
-                self._log.info(
-                    f"Prepared {len(feat)} data points for {ticker}.")
+                self._log.info(f"Prepared {len(feat)} data points for {ticker}.")
                 all_features.append(feat)
 
             features = np.vstack(all_features)
 
-            self._log.info(
-                f"Total concatenated feature points: {len(features)}")
+            self._log.info(f"Total concatenated feature points: {len(features)}")
             self._log.info("Training GaussianHMM with 3 components...")
             model = GaussianHMM(
                 n_components=3,
@@ -1064,9 +1064,7 @@ class DataHandler:
         """Restart streams if the symbol list changes."""
         if set(symbols) == set(self.symbols):
             return
-        self._log.info(
-            f"Refreshing data streams with {len(symbols)} symbols."
-        )
+        self._log.info(f"Refreshing data streams with {len(symbols)} symbols.")
         if self.main_socket_task:
             self.main_socket_task.cancel()
             try:
@@ -1087,7 +1085,9 @@ class AIAnalysisManager:
             self.llm_client = None
             self.config.enable_ai_decider = False
         else:
-            self.llm_client = OpenAI(api_key=api_settings.openai_api_key)
+            self.llm_client = AsyncOpenAI(api_key=api_settings.openai_api_key)
+        self.decision_cache: OrderedDict[str, dict] = OrderedDict()
+        self._cache_max = 128
         self._log = structlog.get_logger(self.__class__.__name__)
 
     async def get_ai_trade_decision(self, signal_event: SignalEvent) -> dict:
@@ -1099,6 +1099,26 @@ class AIAnalysisManager:
             }
 
         signal = signal_event.details
+        prompt_key = hashlib.sha256(
+            json.dumps(
+                {
+                    "symbol": signal_event.symbol,
+                    "action": signal_event.action,
+                    "price": round(signal_event.price, 4),
+                    "strategies": signal.get("strategy_names", []),
+                    "regime": signal.get("market_regime", "UNKNOWN"),
+                    "indicators": signal.get("indicators", {}),
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+
+        if prompt_key in self.decision_cache:
+            self._log.debug(
+                f"Using cached AI decision for {signal_event.symbol} {signal_event.action}"
+            )
+            self.decision_cache.move_to_end(prompt_key)
+            return self.decision_cache[prompt_key]
         system_prompt = """
         You are 'MarketMind', a quantitative crypto trading analyst. Evaluate a trade signal
         by synthesizing all available data. Your output must be a single, valid JSON object.
@@ -1109,21 +1129,20 @@ class AIAnalysisManager:
           "reasoning": "Concise explanation, max 50 words."
         }"""
 
-        user_prompt = f"""
-        Analyze the following trade signal for {signal_event.symbol}:
-        - Action: {signal_event.action}
-        - Price: {signal_event.price:.4f}
-        - Consensus Strategies: {', '.join(signal.get('strategy_names', []))}
-        - Market Regime: {signal.get('market_regime', 'UNKNOWN')}
-        - Key Indicators: {json.dumps(signal.get('indicators', {}), indent=2)}
-        Provide your analysis in the required JSON format.
-        """
+        user_prompt = (
+            f"Analyze the trade signal for {signal_event.symbol}:\n"
+            f"Action: {signal_event.action}\n"
+            f"Price: {signal_event.price:.4f}\n"
+            f"Strategies: {', '.join(signal.get('strategy_names', []))}\n"
+            f"Regime: {signal.get('market_regime', 'UNKNOWN')}\n"
+            f"Indicators: {json.dumps(signal.get('indicators', {}), separators=(',', ':'))}"
+            "\nProvide your analysis in JSON."
+        )
         try:
             self._log.info(
                 f"Requesting AI decision for {signal_event.symbol} {signal_event.action} signal."
             )
-            response = await asyncio.to_thread(
-                self.llm_client.chat.completions.create,
+            response = await self.llm_client.chat.completions.create(
                 model="gpt-4-turbo",
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -1131,7 +1150,7 @@ class AIAnalysisManager:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.2,
-                max_tokens=500,
+                max_tokens=200,
             )
             ai_decision = json.loads(response.choices[0].message.content)
             decision_color = (
@@ -1143,6 +1162,9 @@ class AIAnalysisManager:
                 confidence=f"{ai_decision.get('confidence_score', 0.0):.2f}",
                 reason=ai_decision.get("reasoning"),
             )
+            self.decision_cache[prompt_key] = ai_decision
+            if len(self.decision_cache) > self._cache_max:
+                self.decision_cache.popitem(last=False)
             return ai_decision
         except Exception as e:
             self._log.error(
