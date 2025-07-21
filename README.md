@@ -52,6 +52,12 @@ Open positions automatically use a trailing stop that moves up as the price
 increases. The trailing distance is equal to the initial risk amount,
 allowing profits to be locked in while letting winners run.
 
+## Moving Average Crossover
+
+An additional strategy uses a fast/slow simple moving average crossover
+(`sma_fast` and `sma_slow` in `config.json`) to help identify strong trends.
+Signals are only generated when the fast average crosses the slow average.
+
 ## Automatic Symbol Refresh
 
 Every 10 minutes the bot fetches the top trading pairs by volume and
