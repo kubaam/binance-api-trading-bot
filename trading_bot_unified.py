@@ -1286,6 +1286,8 @@ class StrategyHandler:
         self.config = config
         self.regime_detector = regime_detector
         self.historical_data: Dict[str, pl.DataFrame] = {}
+        # Cache of TA indicator DataFrames keyed by symbol
+        self.indicator_cache: Dict[str, pl.DataFrame] = {}
         self.strategies: List[BaseStrategy] = self._initialize_strategies()
         self._log = structlog.get_logger(self.__class__.__name__)
 
@@ -1309,6 +1311,8 @@ class StrategyHandler:
         for symbol, df in zip(symbols, results):
             if isinstance(df, pl.DataFrame) and not df.is_empty():
                 self.historical_data[symbol] = df
+                # Pre-compute indicators for initial historical data
+                self.indicator_cache[symbol] = self._calculate_all_indicators(df)
             elif isinstance(df, Exception):
                 self._log.error(f"Could not fetch initial data for {symbol}", error=df)
         self._log.info("StrategyHandler is ready with initial data.")
@@ -1379,6 +1383,36 @@ class StrategyHandler:
             )
             return pl.DataFrame()
 
+    def _update_indicator_cache(self, symbol: str) -> pl.DataFrame:
+        """Compute indicators incrementally and update the cache."""
+        df = self.historical_data.get(symbol)
+        if df is None or df.is_empty():
+            return pl.DataFrame()
+
+        cached = self.indicator_cache.get(symbol)
+        last_time = None
+        if cached is not None and not cached.is_empty():
+            last_time = cached["open_time"].max()
+        if last_time:
+            new_df = df.filter(pl.col("open_time") > last_time)
+        else:
+            new_df = df
+
+        if new_df.is_empty():
+            return cached if cached is not None else pl.DataFrame()
+
+        new_ind = self._calculate_all_indicators(new_df)
+        if cached is not None and not cached.is_empty():
+            result = (
+                pl.concat([cached, new_ind])
+                .unique(subset=["open_time"], keep="last")
+                .tail(1000)
+            )
+        else:
+            result = new_ind
+        self.indicator_cache[symbol] = result
+        return result
+
     async def on_market_event(self, event: MarketEvent):
         symbol = event.symbol
         if symbol not in self.historical_data:
@@ -1395,7 +1429,7 @@ class StrategyHandler:
         if self.historical_data[symbol].height < self.config.min_candles_for_analysis:
             return
 
-        data_with_ta = self._calculate_all_indicators(self.historical_data[symbol])
+        data_with_ta = self._update_indicator_cache(symbol)
         if data_with_ta.is_empty():
             return
 
