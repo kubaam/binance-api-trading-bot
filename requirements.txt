@@ -16,5 +16,5 @@ dependency-injector
 colorama
 aiohttp
 joblib
-uvloop
+uvloop; sys_platform != "win32"
 

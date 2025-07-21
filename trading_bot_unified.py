@@ -1,6 +1,5 @@
 # --- Standard & Third-Party Library Imports ---
 import asyncio
-import uvloop
 import json
 import logging
 import math
@@ -69,8 +68,13 @@ from colorama import Fore, Style, init
 # Initialize Colorama for colored console output
 init(autoreset=True)
 
-# Use uvloop for improved asyncio performance
-uvloop.install()
+# Use uvloop for improved asyncio performance when available
+if sys.platform != "win32":
+    try:
+        import uvloop
+        uvloop.install()
+    except ImportError:
+        pass
 
 
 class SafeFileHandler(logging.FileHandler):
