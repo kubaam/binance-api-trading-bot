@@ -8,6 +8,8 @@
   "api_timeout_seconds": 15,
   "api_max_retries": 5,
   "api_backoff_factor": 1.5,
+  "api_requests_per_second": 18,
+  "order_requests_per_second": 9,
   "position_manage_interval_sec": 15,
   "symbol_refresh_interval_sec": 600,
   "portfolio_status_interval_sec": 60,

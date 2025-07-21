@@ -308,6 +308,10 @@ class BotSettings(ObservableSettings):
     api_timeout_seconds: int = 15
     api_max_retries: int = 5
     api_backoff_factor: float = 1.5
+    # Maximum allowed request rate per second across all API calls
+    api_requests_per_second: int = 18
+    # Maximum order placement rate per second
+    order_requests_per_second: int = 9
     position_manage_interval_sec: int = 15
     symbol_refresh_interval_sec: int = 600
     portfolio_status_interval_sec: int = 60
@@ -795,6 +799,30 @@ class Notifier:
             self._log.error("Discord notification failed", error=str(e), title=title)
 
 
+class AsyncRateLimiter:
+    """Simple token bucket rate limiter for asyncio."""
+
+    def __init__(self, rate: int, per: float = 1.0):
+        self._rate = rate
+        self._per = per
+        self._tokens = rate
+        self._last = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last
+            self._tokens = min(self._rate, self._tokens + elapsed * (self._rate / self._per))
+            if self._tokens < 1:
+                sleep_time = (1 - self._tokens) * (self._per / self._rate)
+                await asyncio.sleep(sleep_time)
+                now = time.monotonic()
+                elapsed = now - self._last
+                self._tokens = min(self._rate, self._tokens + elapsed * (self._rate / self._per))
+            self._tokens -= 1
+            self._last = now
+
 class ExchangeService:
     """A resilient wrapper around the Binance client for all API interactions."""
 
@@ -803,6 +831,8 @@ class ExchangeService:
         self._config = config
         self._exchange_info: Dict[str, Any] = {}
         self._semaphore = asyncio.Semaphore(config.concurrent_api_calls)
+        self._rate_limiter = AsyncRateLimiter(config.api_requests_per_second)
+        self._order_limiter = AsyncRateLimiter(config.order_requests_per_second)
         self._log = structlog.get_logger(self.__class__.__name__)
 
     async def initialize(self):
@@ -828,6 +858,7 @@ class ExchangeService:
         delay = self._config.api_backoff_factor
         for i in range(retries):
             try:
+                await self._rate_limiter.acquire()
                 async with self._semaphore:
                     return await asyncio.wait_for(
                         api_func(*args, **kwargs),
@@ -957,6 +988,7 @@ class ExchangeService:
             log_ctx.info(
                 f"{Fore.YELLOW}Placing {side} market order...", formatted_qty=fmt_qty
             )
+            await self._order_limiter.acquire()
             order = await self._execute_api_call(
                 self._client.create_order,
                 symbol=symbol,
