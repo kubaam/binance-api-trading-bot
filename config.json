@@ -29,6 +29,8 @@
     "macd_fast": 12,
     "macd_slow": 26,
     "macd_signal": 9,
+    "sma_fast": 50,
+    "sma_slow": 200,
     "ichimoku_tenkan": 9,
     "ichimoku_kijun": 26,
     "ichimoku_senkou_b": 52

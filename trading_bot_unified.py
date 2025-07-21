@@ -206,6 +206,7 @@ class StrategyType(str, Enum):
     TREND_MACD = "TREND_MACD"
     MEAN_REVERSION_RSI = "MEAN_REVERSION_RSI"
     ICHIMOKU_BREAKOUT = "ICHIMOKU_BREAKOUT"
+    SMA_CROSSOVER = "SMA_CROSSOVER"
 
 
 class ApiSettings(ObservableSettings):
@@ -238,6 +239,8 @@ class StrategySettings(ObservableSettings):
     macd_fast: int = 12
     macd_slow: int = 26
     macd_signal: int = 9
+    sma_fast: int = 50
+    sma_slow: int = 200
     ichimoku_tenkan: int = 9
     ichimoku_kijun: int = 26
     ichimoku_senkou_b: int = 52
@@ -1239,6 +1242,30 @@ class MACDCrossoverStrategy(BaseStrategy):
         return 0
 
 
+class SMACrossoverStrategy(BaseStrategy):
+    def __init__(self, fast, slow):
+        super().__init__(StrategyType.SMA_CROSSOVER)
+        self.fast, self.slow = fast, slow
+
+    def generate_signal(self, data: pl.DataFrame) -> int:
+        if data.height < 2:
+            return 0
+        last, prev = data.row(-1, named=True), data.row(-2, named=True)
+        fast_col = f"sma_{self.fast}"
+        slow_col = f"sma_{self.slow}"
+        if (
+            last.get(fast_col, 0) > last.get(slow_col, 0)
+            and prev.get(fast_col, 0) <= prev.get(slow_col, 0)
+        ):
+            return 1
+        if (
+            last.get(fast_col, 0) < last.get(slow_col, 0)
+            and prev.get(fast_col, 0) >= prev.get(slow_col, 0)
+        ):
+            return -1
+        return 0
+
+
 class IchimokuStrategy(BaseStrategy):
     def __init__(self, tenkan, kijun, senkou_b):
         super().__init__(StrategyType.ICHIMOKU_BREAKOUT)
@@ -1296,6 +1323,7 @@ class StrategyHandler:
         return [
             RSIReversalStrategy(s.rsi_period, s.rsi_oversold, s.rsi_overbought),
             MACDCrossoverStrategy(s.macd_fast, s.macd_slow, s.macd_signal),
+            SMACrossoverStrategy(s.sma_fast, s.sma_slow),
             IchimokuStrategy(s.ichimoku_tenkan, s.ichimoku_kijun, s.ichimoku_senkou_b),
         ]
 
@@ -1335,6 +1363,12 @@ class StrategyHandler:
                     slowperiod=s.macd_slow,
                     signalperiod=s.macd_signal,
                 ).struct.unnest(),
+                plta.sma(pl.col("close"), timeperiod=s.sma_fast).alias(
+                    f"sma_{s.sma_fast}"
+                ),
+                plta.sma(pl.col("close"), timeperiod=s.sma_slow).alias(
+                    f"sma_{s.sma_slow}"
+                ),
             )
 
             tenkan_high = pl.col("high").rolling_max(s.ichimoku_tenkan)
