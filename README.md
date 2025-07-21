@@ -12,6 +12,8 @@ pip install -r requirements.txt
 ```
 
 For optimal performance the bot uses `uvloop` as the event loop when available.
+`uvloop` does not currently support Windows, so the bot falls back to the default
+asyncio event loop on that platform.
 
 ## Configuration
 
