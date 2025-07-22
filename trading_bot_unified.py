@@ -682,17 +682,6 @@ class MarketRegimeDetector:
             self._log.error("Failed to predict regime.", error=e)
             return "PREDICTION_ERROR"
 
-            hidden_states = await asyncio.to_thread(self.model.predict, recent_features)
-            latest_state_idx = hidden_states[-1]
-            self.current_regime = self.regime_names.get(
-                latest_state_idx, f"UNKNOWN_{latest_state_idx}"
-            )
-            self.last_prediction_time = datetime.now()
-            return self.current_regime
-        except Exception as e:
-            self._log.error("Failed to predict regime.", error=e)
-            return "PREDICTION_ERROR"
-
 
 # ==============================================================================
 # --- SECTION 3: CORE SERVICES & MANAGERS (UPGRADED) ---
