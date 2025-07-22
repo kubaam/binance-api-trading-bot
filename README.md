@@ -31,6 +31,14 @@ All other settings are loaded from `config.json` and changes to that file are
 applied on the fly. Keep your API keys only in `.env`; they are never written
 back to `config.json`.
 
+## API Rate Limits
+
+The bot throttles requests to respect Binance's published limits. By default the
+settings in `config.json` allow up to 20 API calls per second and 10 orders per
+second (the equivalent of 100 orders every 10 seconds). Adjust
+`api_requests_per_second` and `order_requests_per_second` if stricter limits are
+required for your account.
+
 ## Running
 
 Execute the bot with:

@@ -309,9 +309,10 @@ class BotSettings(ObservableSettings):
     api_max_retries: int = 5
     api_backoff_factor: float = 1.5
     # Maximum allowed request rate per second across all API calls
-    api_requests_per_second: int = 18
-    # Maximum order placement rate per second
-    order_requests_per_second: int = 9
+    # Binance imposes a hard cap of 20 requests per second
+    api_requests_per_second: int = 20
+    # Maximum order placement rate per second (100 orders / 10 seconds)
+    order_requests_per_second: int = 10
     position_manage_interval_sec: int = 15
     symbol_refresh_interval_sec: int = 600
     portfolio_status_interval_sec: int = 60
