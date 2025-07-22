@@ -841,7 +841,7 @@ class ExchangeService:
                 exc_info=True,
             )
             await self._client.close_connection()
-            sys.exit(1)
+            raise
 
     async def _execute_api_call(self, api_func: Coroutine, *args, **kwargs) -> Any:
         retries = self._config.api_max_retries
@@ -2145,6 +2145,7 @@ async def start_bot(
 ):
     print_banner(config)
     loop = asyncio.get_running_loop()
+    await container.init_resources()
 
     def handle_signal(sig):
         log.warning(f"Received signal {sig}. Initiating graceful shutdown.")
