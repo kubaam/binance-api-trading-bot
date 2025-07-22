@@ -1473,6 +1473,8 @@ class StrategyHandler:
             return cached if cached is not None else pl.DataFrame()
 
         new_ind = self._calculate_all_indicators(new_df)
+        if new_ind.is_empty() or new_ind.width == 0:
+            return cached if cached is not None else pl.DataFrame()
         if cached is not None and not cached.is_empty():
             result = (
                 pl.concat([cached, new_ind])
