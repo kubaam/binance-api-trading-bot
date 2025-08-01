@@ -40,9 +40,11 @@ The bot's architecture is modular, separating concerns into distinct packages:
      * Binance: Go to the [Binance Spot Testnet](https://testnet.binance.vision/) to create free testnet API keys.
      * Glassnode: Sign up for a Glassnode account to get an API key for on-chain data.
      * NewsAPI: Sign up at [newsapi.org](https://newsapi.org) for a free developer API key.
-   * **Edit `config.py`**:
-     * Enter your API keys in the respective sections.
-     * Adjust trading parameters like `TRADE_SYMBOL` and `TIMEFRAME` as needed.
+  * **Edit `config.py`**:
+    * API keys can be supplied via environment variables (`BINANCE_KEY`,
+      `BINANCE_SECRET`, `GLASSNODE_API_KEY`, `NEWS_API_KEY`).  Alternatively you
+      may edit the values directly in the file.
+    * Adjust trading parameters like `TRADE_SYMBOL` and `TIMEFRAME` as needed.
 
 ## How to Run
 Ensure your virtual environment is activated and you have configured `config.py`.
