@@ -59,12 +59,16 @@ class FeatureGenerator:
         try:
             model = ARIMA(close_prices, order=(5, 1, 0))
             model_fit = model.fit()
-            forecast = model_fit.forecast(steps=1)
-            self.df["arima_forecast"] = forecast
-            logging.info(f"🧠 ARIMA forecast for next period: {float(forecast):.2f}")
+            forecast = float(model_fit.forecast(steps=1))
+            self.df["arima_forecast"] = np.nan
+            self.df.loc[self.df.index[-1], "arima_forecast"] = forecast
+            logging.info(f"🧠 ARIMA forecast for next period: {forecast:.2f}")
         except Exception as e:
-            logging.error(f"❌ ARIMA model failed: {e}. Using last close price as forecast.")
-            self.df["arima_forecast"] = close_prices[-1]
+            logging.error(
+                f"❌ ARIMA model failed: {e}. Using last close price as forecast."
+            )
+            self.df["arima_forecast"] = np.nan
+            self.df.loc[self.df.index[-1], "arima_forecast"] = close_prices[-1]
         return self
 
     def generate_features(self):

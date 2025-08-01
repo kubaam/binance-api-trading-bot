@@ -166,11 +166,13 @@ class FeatureGenerator:
         try:
             model = ARIMA(self.df["Close"].values, order=(5, 1, 0))
             fit = model.fit()
-            forecast = fit.forecast(steps=1)
-            self.df["arima_forecast"] = forecast
+            forecast = float(fit.forecast(steps=1))
+            self.df["arima_forecast"] = np.nan
+            self.df.loc[self.df.index[-1], "arima_forecast"] = forecast
         except Exception as e:
             logging.error(f"ARIMA failed: {e}; using last close")
-            self.df["arima_forecast"] = self.df["Close"].iloc[-1]
+            self.df["arima_forecast"] = np.nan
+            self.df.loc[self.df.index[-1], "arima_forecast"] = self.df["Close"].iloc[-1]
         return self
 
     def generate(self) -> pd.DataFrame:
