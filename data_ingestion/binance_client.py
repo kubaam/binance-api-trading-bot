@@ -14,8 +14,8 @@ class BinanceHandler:
         self.api_key = API_CONFIG["binance_api_key"]
         self.api_secret = API_CONFIG["binance_api_secret"]
 
-        if not self.api_key or "YOUR" in self.api_key:
-            raise ValueError("Binance API key is not set in config.py")
+        if not self.api_key or "your" in self.api_key.lower():
+            raise ValueError("Binance API key is not set in environment")
 
         try:
             self.client = Client(self.api_key, self.api_secret, testnet=self.use_testnet)

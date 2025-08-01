@@ -4,6 +4,7 @@ This file bundles all core functionality in a single script.
 
 import logging
 import time
+import os
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
@@ -13,13 +14,16 @@ from binance.exceptions import BinanceAPIException, BinanceOrderException
 from transformers import pipeline
 from statsmodels.tsa.arima.model import ARIMA
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 API_CONFIG = {
     "use_testnet": True,
-    "binance_api_key": "YOUR_BINANCE_TESTNET_API_KEY",
-    "binance_api_secret": "YOUR_BINANCE_TESTNET_API_SECRET",
-    "glassnode_api_key": "YOUR_GLASSNODE_API_KEY",
-    "news_api_key": "YOUR_NEWSAPI_ORG_KEY",
+    "binance_api_key": os.getenv("BINANCE_KEY", "your_binance_key"),
+    "binance_api_secret": os.getenv("BINANCE_SECRET", "your_binance_secret"),
+    "glassnode_api_key": os.getenv("GLASSNODE_API_KEY", "your_glassnode_api_key"),
+    "news_api_key": os.getenv("NEWS_API_KEY", "your_newsapi_org_key"),
 }
 
 TRADING_CONFIG = {
@@ -134,7 +138,7 @@ class ExternalAPIs:
         self.news_base_url = "https://newsapi.org/v2/everything"
 
     def get_on_chain_data(self, asset):
-        if not self.glassnode_api_key or "YOUR" in self.glassnode_api_key:
+        if not self.glassnode_api_key or "your" in self.glassnode_api_key.lower():
             logging.warning("⚠️ Glassnode API key not set. Returning neutral on-chain data.")
             return {"mvrv_z_score": 0, "sopr": 1.0, "nupl": 0.5}
         metrics = {
@@ -157,7 +161,7 @@ class ExternalAPIs:
         return result
 
     def get_news_headlines(self, query):
-        if not self.news_api_key or "YOUR" in self.news_api_key:
+        if not self.news_api_key or "your" in self.news_api_key.lower():
             logging.warning("⚠️ NewsAPI key not set. Skipping sentiment analysis.")
             return []
         try:

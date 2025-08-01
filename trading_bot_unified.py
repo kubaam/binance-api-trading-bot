@@ -214,10 +214,10 @@ class StrategyType(str, Enum):
 
 
 class ApiSettings(ObservableSettings):
-    binance_key: str = "YOUR_BINANCE_API_KEY"
-    binance_secret: str = "YOUR_BINANCE_SECRET_KEY"
-    openai_api_key: str = "YOUR_OPENAI_API_KEY"
-    discord_webhook_url: str = "YOUR_DISCORD_WEBHOOK_URL"
+    binance_key: str = "your_binance_key"
+    binance_secret: str = "your_binance_secret"
+    openai_api_key: str = "your_openai_key"
+    discord_webhook_url: str = "your_discord_webhook"
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False
     )
@@ -763,7 +763,7 @@ class Notifier:
     async def send(
         self, title: str, msg: str, color: int = 3447003, is_error: bool = False
     ):
-        if not self._webhook_url or "YOUR_DISCORD_WEBHOOK_URL" in self._webhook_url:
+        if not self._webhook_url or "your" in self._webhook_url.lower():
             return
         if self._session.closed:
             self._log.error(
@@ -1112,7 +1112,7 @@ class AIAnalysisManager:
         self.config = config
         if (
             not api_settings.openai_api_key
-            or "YOUR_OPENAI_API_KEY" in api_settings.openai_api_key
+            or "your" in api_settings.openai_api_key.lower()
         ):
             log.warning("OpenAI API key not configured. AI Decider disabled.")
             self.llm_client = None
@@ -2294,8 +2294,8 @@ if __name__ == "__main__":
     )  # Získání loggeru po nastavení
 
     if (
-        "YOUR_BINANCE_API_KEY" in cfg.api.binance_key
-        or "YOUR_BINANCE_SECRET_KEY" in cfg.api.binance_secret
+        "your" in cfg.api.binance_key.lower()
+        or "your" in cfg.api.binance_secret.lower()
     ):
         log.critical(
             "FATAL: API keys are set to placeholders. Please configure them in your .env file before running."

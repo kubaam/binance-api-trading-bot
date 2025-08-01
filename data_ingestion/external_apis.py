@@ -15,7 +15,7 @@ class ExternalAPIs:
 
     def get_on_chain_data(self, asset):
         """Fetch key on-chain metrics from Glassnode."""
-        if not self.glassnode_api_key or "YOUR" in self.glassnode_api_key:
+        if not self.glassnode_api_key or "your" in self.glassnode_api_key.lower():
             logging.warning("⚠️ Glassnode API key not set. Returning neutral on-chain data.")
             return {'mvrv_z_score': 0, 'sopr': 1.0, 'nupl': 0.5}
 
@@ -45,7 +45,7 @@ class ExternalAPIs:
 
     def get_news_headlines(self, query):
         """Fetch recent news headlines for a given query from NewsAPI."""
-        if not self.news_api_key or "YOUR" in self.news_api_key:
+        if not self.news_api_key or "your" in self.news_api_key.lower():
             logging.warning("⚠️ NewsAPI key not set. Skipping sentiment analysis.")
             return []
 

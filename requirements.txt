@@ -1,9 +1,10 @@
 python-binance
 pandas
-numpy
+numpy<2
 pandas-ta
 requests
 statsmodels
 transformers
 torch
 scikit-learn
+python-dotenv

@@ -2,12 +2,17 @@
 
 # --- API Configuration ---
 # IMPORTANT: Use the TESTNET for development and testing.
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 API_CONFIG = {
     "use_testnet": True,
-    "binance_api_key": "YOUR_BINANCE_TESTNET_API_KEY",
-    "binance_api_secret": "YOUR_BINANCE_TESTNET_API_SECRET",
-    "glassnode_api_key": "YOUR_GLASSNODE_API_KEY",
-    "news_api_key": "YOUR_NEWSAPI_ORG_KEY"
+    "binance_api_key": os.getenv("BINANCE_KEY", "your_binance_key"),
+    "binance_api_secret": os.getenv("BINANCE_SECRET", "your_binance_secret"),
+    "glassnode_api_key": os.getenv("GLASSNODE_API_KEY", "your_glassnode_api_key"),
+    "news_api_key": os.getenv("NEWS_API_KEY", "your_newsapi_org_key"),
 }
 
 # --- Trading Parameters ---

@@ -1,7 +1,7 @@
 import logging
 from binance.enums import *
 
-from .position_sizer import PositionSizer
+from risk_management.position_sizer import PositionSizer
 
 
 class TradeExecutor:
