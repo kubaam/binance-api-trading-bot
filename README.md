@@ -50,12 +50,16 @@ The bot's architecture is modular, separating concerns into distinct packages:
 
 ## How to Run
 Ensure your virtual environment is activated and you have configured `config.py`.
-You can run the modular version or the all-in-one script:
+You can run the modular version, the original single-file example, or the new
+"mega" script that includes all core functionality in one file:
 ```bash
 # Modular approach
 python main.py
 
-# Single-file version
+# Original single-file example
 python gemini_single.py
+
+# New combined version
+python mega_trading_bot.py
 ```
 The bot will start, fetch initial data, generate features, and then enter a loop to check for trading opportunities at the interval defined by the timeframe in the configuration.
