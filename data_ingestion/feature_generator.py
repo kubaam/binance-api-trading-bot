@@ -1,8 +1,10 @@
 """Generate TA, on-chain, sentiment and forecast features."""
 import logging
+import os
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
 from transformers import pipeline
 from statsmodels.tsa.arima.model import ARIMA
 from .external_apis import ExternalAPIs
