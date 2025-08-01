@@ -9,7 +9,7 @@ This repository contains the source code for a sophisticated, multi-signal crypt
 
 ## Architecture Overview
 The bot's architecture is modular, separating concerns into distinct packages:
-* **config.py**: Central configuration for API keys, trading pairs, and strategy parameters. You must add your API keys here.
+* **config.py**: Central configuration for trading parameters. API keys are loaded from a `.env` file.
 * **main.py**: The main application entry point that runs the trading loop.
 * **data_ingestion/**: Handles all data collection and feature generation.
   * `binance_client.py`: Manages the connection to the Binance API.
@@ -40,12 +40,13 @@ The bot's architecture is modular, separating concerns into distinct packages:
      * Binance: Go to the [Binance Spot Testnet](https://testnet.binance.vision/) to create free testnet API keys.
      * Glassnode: Sign up for a Glassnode account to get an API key for on-chain data.
      * NewsAPI: Sign up at [newsapi.org](https://newsapi.org) for a free developer API key.
+   * **Create a `.env` file**:
+     * Copy `.env.sample` to `.env` and replace the default values with your keys.
    * **Edit `config.py`**:
-     * Enter your API keys in the respective sections.
      * Adjust trading parameters like `TRADE_SYMBOL` and `TIMEFRAME` as needed.
 
 ## How to Run
-Ensure your virtual environment is activated and you have configured `config.py`.
+Ensure your virtual environment is activated and you have created a `.env` file and adjusted `config.py`.
 You can run the modular version or the all-in-one script:
 ```bash
 # Modular approach

@@ -763,7 +763,7 @@ class Notifier:
     async def send(
         self, title: str, msg: str, color: int = 3447003, is_error: bool = False
     ):
-        if not self._webhook_url or "YOUR_DISCORD_WEBHOOK_URL" in self._webhook_url:
+        if not self._webhook_url or self._webhook_url == "YOUR_DISCORD_WEBHOOK_URL":
             return
         if self._session.closed:
             self._log.error(
@@ -1112,7 +1112,7 @@ class AIAnalysisManager:
         self.config = config
         if (
             not api_settings.openai_api_key
-            or "YOUR_OPENAI_API_KEY" in api_settings.openai_api_key
+            or api_settings.openai_api_key == "YOUR_OPENAI_API_KEY"
         ):
             log.warning("OpenAI API key not configured. AI Decider disabled.")
             self.llm_client = None
@@ -2294,8 +2294,10 @@ if __name__ == "__main__":
     )  # Získání loggeru po nastavení
 
     if (
-        "YOUR_BINANCE_API_KEY" in cfg.api.binance_key
-        or "YOUR_BINANCE_SECRET_KEY" in cfg.api.binance_secret
+        not cfg.api.binance_key
+        or cfg.api.binance_key == "YOUR_BINANCE_API_KEY"
+        or not cfg.api.binance_secret
+        or cfg.api.binance_secret == "YOUR_BINANCE_SECRET_KEY"
     ):
         log.critical(
             "FATAL: API keys are set to placeholders. Please configure them in your .env file before running."
