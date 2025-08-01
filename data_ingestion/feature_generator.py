@@ -1,5 +1,12 @@
 import logging
 import numpy as np
+
+# pandas_ta expects a constant named ``NaN`` from NumPy, but recent versions
+# of NumPy expose only ``nan``. Create the alias if it's missing to avoid an
+# ImportError when importing pandas_ta.
+if not hasattr(np, "NaN"):
+    np.NaN = np.nan
+
 import pandas as pd
 import pandas_ta as ta
 try:
