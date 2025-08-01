@@ -42,8 +42,10 @@ The bot's architecture is modular, separating concerns into distinct packages:
      * NewsAPI: Sign up at [newsapi.org](https://newsapi.org) for a free developer API key.
   * **Edit `config.py`**:
     * API keys can be supplied via environment variables (`BINANCE_KEY`,
-      `BINANCE_SECRET`, `GLASSNODE_API_KEY`, `NEWS_API_KEY`).  Alternatively you
-      may edit the values directly in the file.
+      `BINANCE_SECRET`, `GLASSNODE_API_KEY`, `NEWS_API_KEY`). You can place these
+      variables in a `.env` file at the project root and they will be loaded
+      automatically.
+    * Alternatively you may edit the values directly in the file.
     * Adjust trading parameters like `TRADE_SYMBOL` and `TIMEFRAME` as needed.
 
 ## How to Run
