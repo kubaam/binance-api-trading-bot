@@ -1,92 +1,57 @@
-# Trading Bot
+# Gemini Advanced Crypto Trader (Full Implementation)
+This repository contains the source code for a sophisticated, multi-signal cryptocurrency trading bot designed to operate on Binance. The architecture integrates multiple layers of analysis, including advanced technical indicators, on-chain metrics, news sentiment analysis, and a time-series forecasting model.
 
-This repository contains a single-file Python trading bot implementation.
+⚠️ **IMPORTANT DISCLAIMER** ⚠️
+* **Educational Use Only**: This is a proof-of-concept and an educational tool, NOT a plug-and-play, profitable trading system.
+* **High Risk**: Algorithmic trading is extremely risky and can lead to significant financial loss. You are solely responsible for any actions taken by this bot.
+* **Testnet Default**: The bot is configured by default to use the Binance Spot Testnet. You are solely responsible for any activity if you switch to the live market.
+* **No Warranty**: The code is provided "as-is" without any warranty. Use at your own risk.
 
-## Requirements
+## Architecture Overview
+The bot's architecture is modular, separating concerns into distinct packages:
+* **config.py**: Central configuration for API keys, trading pairs, and strategy parameters. You must add your API keys here.
+* **main.py**: The main application entry point that runs the trading loop.
+* **data_ingestion/**: Handles all data collection and feature generation.
+  * `binance_client.py`: Manages the connection to the Binance API.
+  * `external_apis.py`: Connects to third-party APIs for on-chain data (Glassnode) and news/sentiment (NewsAPI).
+  * `feature_generator.py`: Calculates technical indicators, fetches external data, and runs a predictive ARIMA model to create a comprehensive feature set.
+* **modeling/**: Responsible for generating the final trading signal.
+  * `signal_combiner.py`: Aggregates all features using a weighted scoring system to produce a final Buy/Sell/Hold signal.
+* **risk_management/**: Manages position sizing and risk controls.
+  * `position_sizer.py`: Calculates trade size based on volatility (ATR) and portfolio risk settings.
+* **execution/**: Handles the placement and management of orders.
+  * `trade_executor.py`: Interacts with Binance to execute trades using OCO (One-Cancels-the-Other) orders for simultaneous Stop-Loss and Take-Profit placement.
 
-Install Python 3.8 or later. Required packages are listed in `requirements.txt`.
-You can install them using:
+## Setup & Installation
+1. **Clone the Repository**
+   ```bash
+   git clone <repository_url>
+   cd gemini-advanced-crypto-trader
+   ```
+2. **Install Dependencies**
+   It is highly recommended to use a Python virtual environment.
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
+   pip install -r requirements.txt
+   ```
+3. **Configure the Bot**
+   * **Get API Keys**:
+     * Binance: Go to the [Binance Spot Testnet](https://testnet.binance.vision/) to create free testnet API keys.
+     * Glassnode: Sign up for a Glassnode account to get an API key for on-chain data.
+     * NewsAPI: Sign up at [newsapi.org](https://newsapi.org) for a free developer API key.
+   * **Edit `config.py`**:
+     * Enter your API keys in the respective sections.
+     * Adjust trading parameters like `TRADE_SYMBOL` and `TIMEFRAME` as needed.
 
+## How to Run
+Ensure your virtual environment is activated and you have configured `config.py`.
+You can run the modular version or the all-in-one script:
 ```bash
-pip install -r requirements.txt
+# Modular approach
+python main.py
+
+# Single-file version
+python gemini_single.py
 ```
-
-For optimal performance the bot uses `uvloop` as the event loop when available.
-`uvloop` does not currently support Windows, so the bot falls back to the default
-asyncio event loop on that platform.
-
-## Configuration
-
-Create a `.env` file in the repository root with your API keys:
-
-```bash
-BINANCE_KEY="your_binance_key"
-BINANCE_SECRET="your_binance_secret"
-OPENAI_API_KEY="your_openai_key"
-DISCORD_WEBHOOK_URL="your_discord_webhook"
-```
-
-A sample file is provided as `.env.sample`.
-All other settings are loaded from `config.json` and changes to that file are
-applied on the fly. Keep your API keys only in `.env`; they are never written
-back to `config.json`.
-
-## API Rate Limits
-
-The bot throttles requests to respect Binance's published limits. By default the
-settings in `config.json` allow up to 20 API calls per second and 10 orders per
-second (the equivalent of 100 orders every 10 seconds). Adjust
-`api_requests_per_second` and `order_requests_per_second` if stricter limits are
-required for your account.
-
-## Running
-
-Execute the bot with:
-
-```bash
-python trading_bot_unified.py
-```
-
-On Windows you can also run `start.bat`.
-
-## Dynamic Risk Management
-
-The bot now includes an optional self-adjusting risk mode. When enabled (the
-default), the position size risk percentage increases after a series of winning
-trades and decreases after losses, bounded by the limits defined in
-`RiskSettings`.
-
-## Trailing Stops
-
-Open positions automatically use a trailing stop that moves up as the price
-increases. The trailing distance is equal to the initial risk amount,
-allowing profits to be locked in while letting winners run.
-
-## Moving Average Crossover
-
-An additional strategy uses a fast/slow simple moving average crossover
-(`sma_fast` and `sma_slow` in `config.json`) to help identify strong trends.
-Signals are only generated when the fast average crosses the slow average.
-
-## Automatic Symbol Refresh
-
-Every 10 minutes the bot fetches the top trading pairs by volume and
-restarts its market data streams if the list of symbols has changed. This
-keeps the strategy focused on the most liquid markets without manual
-intervention.
-
-## Market Regime Detection
-
-The bot trains a Hidden Markov Model (HMM) to categorize market regimes.
-Training now uses historical data from several tickers by default
-(`BTCUSDC`, `ETHUSDC` and `BNBUSDC`) for a more robust model. You can
-override this list with the `REGIME_TRAINING_TICKERS` environment
-variable.
-
-## Troubleshooting
-
-If the bot exits with a `TimeoutError` during startup, it usually means the
-Binance API could not be reached. Verify that your network connection allows
-outbound HTTPS requests to `api.binance.com` and try again. Some environments may
-require a proxy or VPN to access the API.
-
+The bot will start, fetch initial data, generate features, and then enter a loop to check for trading opportunities at the interval defined by the timeframe in the configuration.
