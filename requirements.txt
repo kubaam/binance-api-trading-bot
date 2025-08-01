@@ -7,3 +7,4 @@ statsmodels
 transformers
 torch
 scikit-learn
+python-dotenv

@@ -1,5 +1,10 @@
 """Configuration settings for the Gemini Advanced Crypto Trader."""
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Automatically load variables from a .env file if present
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
 # --- API Configuration ---
 # IMPORTANT: Use the TESTNET for development and testing.
