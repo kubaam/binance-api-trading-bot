@@ -13,7 +13,9 @@ API_CONFIG = {
     "use_testnet": True,
     "binance_api_key": os.environ.get("BINANCE_KEY", "YOUR_BINANCE_TESTNET_API_KEY"),
     "binance_api_secret": os.environ.get("BINANCE_SECRET", "YOUR_BINANCE_TESTNET_API_SECRET"),
-    "glassnode_api_key": os.environ.get("GLASSNODE_API_KEY", "YOUR_GLASSNODE_API_KEY"),
+    # CoinMetrics Community API does not strictly require an API key, but you may
+    # provide one via the COINMETRICS_API_KEY environment variable if you have it.
+    "coinmetrics_api_key": os.environ.get("COINMETRICS_API_KEY", ""),
     "news_api_key": os.environ.get("NEWS_API_KEY", "YOUR_NEWSAPI_ORG_KEY"),
 }
 

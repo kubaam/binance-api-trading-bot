@@ -28,14 +28,16 @@ class SignalCombiner:
 
     def _get_on_chain_signal(self):
         score = 0
-        mvrv_z = self.data['mvrv_z_score']
-        sopr = self.data['sopr']
-        if mvrv_z > 7.0:
-            score -= 1
-        elif mvrv_z < 0.1:
-            score += 1
-        if sopr < 1.0:
+        active_addresses = self.data['active_addresses']
+        tx_count = self.data['transaction_count']
+        if active_addresses > 700000:
             score += 0.5
+        elif active_addresses < 300000:
+            score -= 0.5
+        if tx_count > 1000000:
+            score += 0.5
+        elif tx_count < 500000:
+            score -= 0.5
         return max(min(score, 1), -1)
 
     def _get_sentiment_signal(self):
