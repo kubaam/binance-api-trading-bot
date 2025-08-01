@@ -13,7 +13,7 @@ The bot's architecture is modular, separating concerns into distinct packages:
 * **main.py**: The main application entry point that runs the trading loop.
 * **data_ingestion/**: Handles all data collection and feature generation.
   * `binance_client.py`: Manages the connection to the Binance API.
-  * `external_apis.py`: Connects to third-party APIs for on-chain data (Glassnode) and news/sentiment (NewsAPI).
+  * `external_apis.py`: Connects to third-party APIs for on-chain data (CoinMetrics) and news/sentiment (NewsAPI).
   * `feature_generator.py`: Calculates technical indicators, fetches external data, and runs a predictive ARIMA model to create a comprehensive feature set.
 * **modeling/**: Responsible for generating the final trading signal.
   * `signal_combiner.py`: Aggregates all features using a weighted scoring system to produce a final Buy/Sell/Hold signal.
@@ -37,12 +37,12 @@ The bot's architecture is modular, separating concerns into distinct packages:
    ```
 3. **Configure the Bot**
    * **Get API Keys**:
-     * Binance: Go to the [Binance Spot Testnet](https://testnet.binance.vision/) to create free testnet API keys.
-     * Glassnode: Sign up for a Glassnode account to get an API key for on-chain data.
-     * NewsAPI: Sign up at [newsapi.org](https://newsapi.org) for a free developer API key.
+    * Binance: Go to the [Binance Spot Testnet](https://testnet.binance.vision/) to create free testnet API keys.
+    * CoinMetrics: This project uses the free [CoinMetrics Community API](https://coinmetrics.io/community-api/), which works without an API key. If you have a key, set `COINMETRICS_API_KEY`.
+    * NewsAPI: Sign up at [newsapi.org](https://newsapi.org) for a free developer API key.
   * **Edit `config.py`**:
     * API keys can be supplied via environment variables (`BINANCE_KEY`,
-      `BINANCE_SECRET`, `GLASSNODE_API_KEY`, `NEWS_API_KEY`). You can place these
+      `BINANCE_SECRET`, `COINMETRICS_API_KEY`, `NEWS_API_KEY`). You can place these
       variables in a `.env` file at the project root and they will be loaded
       automatically.
     * Alternatively you may edit the values directly in the file.
