@@ -61,5 +61,8 @@ python gemini_single.py
 
 # New combined version
 python mega_trading_bot.py
+
+# All-in-one example with .env keys
+python single_trading_bot.py
 ```
 The bot will start, fetch initial data, generate features, and then enter a loop to check for trading opportunities at the interval defined by the timeframe in the configuration.
