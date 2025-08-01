@@ -1,20 +1,9 @@
 python-binance
-polars
-polars-talib
-sqlalchemy
-aiosqlite
-httpx
-openai
-rich
-hmmlearn
+pandas
 numpy
+pandas-ta
+requests
+statsmodels
+transformers
+torch
 scikit-learn
-pydantic
-pydantic-settings
-structlog
-dependency-injector
-colorama
-aiohttp
-joblib
-uvloop; sys_platform != "win32"
-
