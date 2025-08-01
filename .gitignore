@@ -34,3 +34,4 @@ venv.bak/
 
 # User-specific files
 config_local.py
+!/.env

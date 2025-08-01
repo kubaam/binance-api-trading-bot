@@ -2,7 +2,10 @@ import logging
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
-from transformers import pipeline
+try:
+    from transformers import pipeline
+except Exception:  # pragma: no cover - optional dependency
+    pipeline = None
 from statsmodels.tsa.arima.model import ARIMA
 
 from .external_apis import ExternalAPIs
@@ -17,7 +20,21 @@ class FeatureGenerator:
             raise ValueError("A valid DataFrame must be provided.")
         self.df = df.copy()
         self.external_api = ExternalAPIs()
-        self.sentiment_pipeline = pipeline("sentiment-analysis", model=SENTIMENT_MODEL_NAME)
+        if pipeline:
+            try:
+                self.sentiment_pipeline = pipeline(
+                    "sentiment-analysis", model=SENTIMENT_MODEL_NAME
+                )
+            except Exception as e:  # handle missing backends like torch
+                logging.warning(
+                    "Sentiment analysis pipeline unavailable: %s", str(e)
+                )
+                self.sentiment_pipeline = None
+        else:
+            self.sentiment_pipeline = None
+            logging.warning(
+                "Sentiment analysis disabled; transformers or backend not available."
+            )
 
     def add_technical_indicators(self):
         self.df.ta.ema(length=50, append=True)
@@ -36,16 +53,20 @@ class FeatureGenerator:
         return self
 
     def add_sentiment_data(self):
+        if self.sentiment_pipeline is None:
+            self.df["sentiment_score"] = 0
+            return self
+
         headlines = self.external_api.get_news_headlines(TRADING_CONFIG["asset"])
         if not headlines:
-            self.df['sentiment_score'] = 0
+            self.df["sentiment_score"] = 0
             return self
 
         sentiments = self.sentiment_pipeline(headlines)
-        score_map = {'negative': -1, 'neutral': 0, 'positive': 1}
-        scores = [score_map.get(s['label'].lower(), 0) * s['score'] for s in sentiments]
+        score_map = {"negative": -1, "neutral": 0, "positive": 1}
+        scores = [score_map.get(s["label"].lower(), 0) * s["score"] for s in sentiments]
         avg_sentiment = np.mean(scores) if scores else 0
-        self.df['sentiment_score'] = avg_sentiment
+        self.df["sentiment_score"] = avg_sentiment
         logging.info(f"❤️ Calculated average sentiment score: {avg_sentiment:.4f}")
         return self
 
