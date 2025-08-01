@@ -167,7 +167,9 @@ class FeatureGenerator:
             model = ARIMA(self.df["Close"].values, order=(5, 1, 0))
             fit = model.fit()
             forecast = fit.forecast(steps=1)
-            self.df["arima_forecast"] = forecast
+            forecast_value = float(forecast[0])
+            self.df["arima_forecast"] = forecast_value
+            logging.info(f"ARIMA forecast for next period: {forecast_value:.2f}")
         except Exception as e:
             logging.error(f"ARIMA failed: {e}; using last close")
             self.df["arima_forecast"] = self.df["Close"].iloc[-1]
