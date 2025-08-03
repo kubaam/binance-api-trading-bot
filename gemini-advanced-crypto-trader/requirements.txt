@@ -1,0 +1,20 @@
+# For Binance API interaction
+python-binance
+
+# For data manipulation and analysis
+pandas
+numpy
+
+# For technical analysis indicators
+pandas-ta
+
+# For external API requests
+requests
+
+# For time-series forecasting (ARIMA)
+statsmodels
+
+# For sentiment analysis (Hugging Face)
+transformers
+torch
+scikit-learn
