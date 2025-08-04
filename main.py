@@ -20,6 +20,7 @@ import csv
 import signal
 import time
 import contextlib
+import argparse
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from typing import (
@@ -79,8 +80,48 @@ if sys.platform != "win32":
     except ImportError:
         pass
 
+try:
+    import orjson
+except Exception:  # pragma: no cover - optional dependency
+    orjson = None
 
-class SafeFileHandler(logging.FileHandler):
+
+def read_json(path: Path) -> Dict[str, Any]:
+    """Load JSON data from *path* using orjson when available."""
+    if orjson:
+        return orjson.loads(path.read_bytes())  # type: ignore[no-any-return]
+    with path.open() as f:
+        return json.load(f)
+
+
+def write_json(path: Path, data: Dict[str, Any]) -> None:
+    """Write JSON data to *path* using orjson when available."""
+    if orjson:
+        path.write_bytes(orjson.dumps(data, option=orjson.OPT_INDENT_2))
+    else:
+        with path.open("w") as f:
+            json.dump(data, f, indent=2)
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for runtime configuration."""
+    parser = argparse.ArgumentParser(description="Run the trading bot.")
+    parser.add_argument("--config", help="Path to config file", default=None)
+    parser.add_argument("--log-level", help="Override log level from config", default=None)
+    parser.add_argument(
+        "--once", action="store_true", help="Run the bot only once and exit"
+    )
+    return parser.parse_args()
+
+
+class SafeRotatingFileHandler(RotatingFileHandler):
+    """Rotating file handler that suppresses repeated I/O errors.
+
+    Using a rotating handler prevents the log files from growing without
+    bound which can degrade performance and fill disk. Any file-system
+    related errors are only reported once to stderr to avoid flooding.
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.error_notified = False
@@ -148,12 +189,14 @@ def setup_logging(log_level: str = "INFO", is_production: bool = False):
     console_handler.setFormatter(console_formatter)
 
     log_file_path = "data/bot_logs_v8.json"
-    file_handler = SafeFileHandler(log_file_path, mode="a", encoding="utf-8")
+    file_handler = SafeRotatingFileHandler(
+        log_file_path, maxBytes=5_000_000, backupCount=3, encoding="utf-8"
+    )
     file_handler.setFormatter(json_formatter)
 
     error_log_file_path = "data/bot_errors_v8.log"
-    error_file_handler = SafeFileHandler(
-        error_log_file_path, mode="a", encoding="utf-8"
+    error_file_handler = SafeRotatingFileHandler(
+        error_log_file_path, maxBytes=1_000_000, backupCount=5, encoding="utf-8"
     )
     error_file_handler.setLevel(logging.ERROR)
     error_file_handler.setFormatter(json_formatter)
@@ -336,8 +379,7 @@ class ConfigManager:
     def _load_or_create(self) -> BotSettings:
         if self.path.exists():
             try:
-                with self.path.open() as f:
-                    data = json.load(f)
+                data = read_json(self.path)
                 data.pop("api", None)
                 return BotSettings.model_validate(data)
             except Exception as e:
@@ -346,8 +388,7 @@ class ConfigManager:
         try:
             data = cfg.model_dump(mode="json")
             data.pop("api", None)
-            with self.path.open("w") as f:
-                json.dump(data, f, indent=2)
+            write_json(self.path, data)
             self.last_mtime = self.path.stat().st_mtime
         except Exception as e:
             self.log.error("Failed to write default config.json", error=e)
@@ -357,8 +398,7 @@ class ConfigManager:
         try:
             data = self.config.model_dump(mode="json")
             data.pop("api", None)
-            with self.path.open("w") as f:
-                json.dump(data, f, indent=2)
+            write_json(self.path, data)
             self.last_mtime = self.path.stat().st_mtime
         except Exception as e:
             self.log.error("Failed to write config.json", error=e)
@@ -370,8 +410,7 @@ class ConfigManager:
                     mtime = self.path.stat().st_mtime
                     if mtime != self.last_mtime:
                         self.log.info("Reloading configuration from file")
-                        with self.path.open() as f:
-                            data = json.load(f)
+                        data = read_json(self.path)
                         data.pop("api", None)
                         new_cfg = BotSettings.model_validate(data)
                         self.config.begin_update()
@@ -776,6 +815,10 @@ class ExchangeService:
         self._client = client
         self._config = config
         self._exchange_info: Dict[str, Any] = {}
+        # Cache for quick lookup of symbol filters. Building this map during
+        # initialization avoids repeatedly iterating over the full filter
+        # list for each symbol which becomes costly when called frequently.
+        self._filters: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._semaphore = asyncio.Semaphore(config.concurrent_api_calls)
         self._rate_limiter = AsyncRateLimiter(config.api_requests_per_second)
         self._order_limiter = AsyncRateLimiter(config.order_requests_per_second)
@@ -786,6 +829,11 @@ class ExchangeService:
             await self._execute_api_call(self._client.ping)
             info = await self._execute_api_call(self._client.get_exchange_info)
             self._exchange_info = {s["symbol"]: s for s in info["symbols"]}
+            # Pre-process filters for faster access later on
+            self._filters = {
+                sym: {f["filterType"]: f for f in data.get("filters", [])}
+                for sym, data in self._exchange_info.items()
+            }
             self._log.info(
                 f"{Fore.GREEN}✅ Exchange service initialized",
                 symbols_loaded=len(self._exchange_info),
@@ -842,8 +890,14 @@ class ExchangeService:
         raise ConnectionError(f"API call failed after {retries} retries.")
 
     def get_symbol_filter(self, symbol: str, filter_type: str) -> Optional[Dict]:
-        filters = self._exchange_info.get(symbol, {}).get("filters", [])
-        return next((f for f in filters if f.get("filterType") == filter_type), None)
+        """Return a filter definition for a symbol if available.
+
+        With the filters pre-cached during :meth:`initialize`, this lookup is a
+        simple dictionary access instead of iterating over the full filter list
+        every time. For symbols or filter types that do not exist, ``None`` is
+        returned.
+        """
+        return self._filters.get(symbol, {}).get(filter_type)
 
     def get_lot_size_info(self, symbol: str) -> tuple[int, float]:
         f = self.get_symbol_filter(symbol, "LOT_SIZE")
@@ -1677,7 +1731,12 @@ async def _binance_client_provider(config: BotSettings) -> AsyncGenerator[AsyncC
 
 
 class AppContainer(containers.DeclarativeContainer):
-    config_manager = providers.Singleton(ConfigManager, Path("config.json"))
+    # Allow overriding the location of the configuration file via the
+    # ``BOT_CONFIG_PATH`` environment variable. This makes deployment and
+    # testing more flexible because a custom path can be supplied without
+    # modifying code.
+    _cfg_path = Path(os.getenv("BOT_CONFIG_PATH", "config.json"))
+    config_manager = providers.Singleton(ConfigManager, _cfg_path)
     config = providers.Singleton(lambda cm: cm.config, config_manager)
     aiohttp_session = providers.Resource(_aiohttp_session_provider)
     binance_client = providers.Resource(_binance_client_provider, config=config)
@@ -1835,20 +1894,31 @@ async def graceful_shutdown(loop: asyncio.AbstractEventLoop, notifier: Notifier,
 
 
 if __name__ == "__main__":
+    args = parse_args()
     container = AppContainer()
+    if args.config:
+        container._cfg_path = Path(args.config)
     try:
         cfg_manager = container.config_manager()
         cfg = cfg_manager.config
+        if args.log_level:
+            cfg.log_level = args.log_level
         container.wire(modules=[__name__])
     except Exception as e:
-        print(f"CRITICAL: Failed to initialize configuration. Check your .env file and settings. Error: {e}")
+        print(
+            "CRITICAL: Failed to initialize configuration. Check your .env file and settings. Error: {e}".format(
+                e=e
+            )
+        )
         sys.exit(1)
 
     setup_logging(cfg.log_level, cfg.is_production)
     log = structlog.get_logger("TradingBotV8.7-Unified-Main")
 
     if not cfg.api.binance_key or not cfg.api.binance_secret:
-        log.critical("FATAL: API keys are missing. Please configure them in your .env file before running.")
+        log.critical(
+            "FATAL: API keys are missing. Please configure them in your .env file before running."
+        )
         sys.exit(1)
 
     while True:
@@ -1858,19 +1928,28 @@ if __name__ == "__main__":
             log.info("Bot stopped by user or system.")
             break
         except Exception as e:
-            log.critical("Unhandled exception in main execution block.", error=str(e), exc_info=True)
+            log.critical(
+                "Unhandled exception in main execution block.",
+                error=str(e),
+                exc_info=True,
+            )
+            if args.once:
+                break
             SHUTDOWN_EVENT.clear()
             time.sleep(5)
             log.info("Restarting bot after unexpected error...")
             continue
         else:
-            if SHUTDOWN_EVENT.is_set():
-                log.info("Bot halted by max drawdown. Exiting.")
+            if SHUTDOWN_EVENT.is_set() or args.once:
+                if SHUTDOWN_EVENT.is_set():
+                    log.info("Bot halted by max drawdown. Exiting.")
+                else:
+                    log.info("Run completed; exiting.")
                 break
             SHUTDOWN_EVENT.clear()
             log.warning("Bot exited and will be restarted automatically.")
             time.sleep(5)
             continue
-            
+
     log.info("Flushing logs and shutting down logging system.")
     logging.shutdown()

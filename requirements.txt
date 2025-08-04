@@ -8,3 +8,17 @@ transformers
 torch
 scikit-learn
 python-dotenv
+polars
+polars-ta-lib
+httpx
+aiohttp
+joblib
+openai
+structlog
+rich
+sqlalchemy
+colorama
+pydantic
+yfinance
+uvloop
+orjson
