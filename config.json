@@ -1,0 +1,47 @@
+{
+  "version": "8.7-Optimized-Fix",
+  "log_level": "INFO",
+  "db_path": "data/trades_v8_usdc.db",
+  "trading": {
+    "quote_asset": "USDC",
+    "top_n_symbols": 25,
+    "interval": "1h",
+    "max_active_positions": 4,
+    "initial_trade_amount": 100.0,
+    "trading_mode": "PAPER"
+  },
+  "strategy": {
+    "signal_consensus_threshold": 2,
+    "trend_ma_period": 100,
+    "rsi_period": 14,
+    "rsi_entry_midline": 50,
+    "volatility_window": 20,
+    "breakout_margin_pct": 0.001,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "sma_fast": 50,
+    "sma_slow": 200,
+    "ichimoku_tenkan": 9,
+    "ichimoku_kijun": 26,
+    "ichimoku_senkou_b": 52
+  },
+  "risk": {
+    "stop_loss_pct": 0.05,
+    "take_profit_pct": 0.12,
+    "max_drawdown_pct": 0.20
+  },
+  "dca": {
+    "max_dca_orders": 2,
+    "dca_buy_threshold_pct": 0.05,
+    "dca_volume_scale": 1.5
+  },
+  "ai": {
+    "enable_ai_decider": false,
+    "min_ai_confidence_score": 0.65
+  },
+  "regime": {
+    "enabled": true,
+    "retraining_interval_sec": 86400
+  }
+}
