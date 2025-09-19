@@ -31,6 +31,7 @@ import signal
 import logging
 import threading
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -82,6 +83,10 @@ def env_level(name: str, default="INFO") -> int:
 
 # ---------------------- load env ----------------------
 load_dotenv()
+SCRIPT_DIR = Path(__file__).resolve().parent
+MODEL_DIR = SCRIPT_DIR / "learning_model"
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
 API_KEY = env_str("BINANCE_API_KEY", "")
 API_SECRET = env_str("BINANCE_API_SECRET", "")
 BASE_URL_OVERRIDE = env_str("BINANCE_BASE_URL", "")
