@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from typing import List
 from unittest import mock
+import tempfile
 
 
 
@@ -238,6 +239,7 @@ class TrendMLTests(unittest.TestCase):
         MAIN.TREND_ML_CACHE.clear()
         MAIN.TREND_ML_DATASETS.clear()
         MAIN.TREND_ML_DATA_VERSION = 0
+        MAIN.TREND_ML_LAST_TRAIN_VERSION = -1
 
     def test_trend_ml_probability_prefers_uptrend(self):
         required = MAIN.TREND_ML_REQUIRED_BARS + 20
@@ -280,23 +282,40 @@ class TrendMLTests(unittest.TestCase):
         class DummyModel:
             def __init__(self):
                 self.trained = None
+                self._fitted = False
+                self.loaded = None
 
             def fit(self, X, y):
                 self.trained = (MAIN.np.array(X, copy=True), MAIN.np.array(y, copy=True))
+                self._fitted = True
                 return self
 
             def predict_proba(self, X):
                 return MAIN.np.array([0.6])
 
+            def is_fitted(self):
+                return self._fitted
+
+            def load_state(self, coef, intercept):
+                self.loaded = (MAIN.np.array(coef, copy=True), float(intercept))
+                self._fitted = True
+
+            def export_state(self):
+                if not self._fitted:
+                    raise ValueError("not fitted")
+                return {"coef": MAIN.np.array([1.0]), "intercept": 0.0}
+
         # Prime dataset for first symbol
         first_model = DummyModel()
-        with mock.patch.object(MAIN, "TrendLogisticModel", return_value=first_model):
+        with mock.patch.object(MAIN, "TrendLogisticModel", return_value=first_model), \
+             mock.patch.object(MAIN, "save_trend_model_state", return_value=None):
             prob_a = MAIN.trend_ml_probability("AAAUSDC", MAIN.ENTRY_TF, closes_a, last_open=101)
         self.assertIsNotNone(prob_a)
         self.assertIsNotNone(first_model.trained)
 
         second_model = DummyModel()
-        with mock.patch.object(MAIN, "TrendLogisticModel", return_value=second_model):
+        with mock.patch.object(MAIN, "TrendLogisticModel", return_value=second_model), \
+             mock.patch.object(MAIN, "save_trend_model_state", return_value=None):
             prob_b = MAIN.trend_ml_probability("BBBUSDC", MAIN.ENTRY_TF, closes_b, last_open=202)
         self.assertIsNotNone(prob_b)
         self.assertIsNotNone(second_model.trained)
@@ -317,6 +336,48 @@ class ModelDirectoryTests(unittest.TestCase):
         expected_dir = Path(MAIN.__file__).resolve().parent / "learning_model"
         self.assertEqual(MAIN.MODEL_DIR, expected_dir)
         self.assertTrue(expected_dir.is_dir())
+
+
+class ModelPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.model_dir = Path(self.tempdir.name)
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+        patcher = mock.patch.object(MAIN, "MODEL_DIR", self.model_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_create_trend_model_without_state_unfitted(self):
+        model = MAIN.create_trend_model()
+        checker = getattr(model, "is_fitted", None)
+        self.assertTrue(callable(checker))
+        self.assertFalse(checker())
+
+    def test_create_trend_model_loads_latest_state(self):
+        older = self.model_dir / "trend_model_19700101000000.npz"
+        newer = self.model_dir / "trend_model_19700102000000.npz"
+        MAIN.np.savez_compressed(older, coef=MAIN.np.array([1.0, 2.0]), intercept=MAIN.np.array([0.1]))
+        MAIN.np.savez_compressed(newer, coef=MAIN.np.array([3.0, 4.0]), intercept=MAIN.np.array([0.2]))
+        model = MAIN.create_trend_model()
+        self.assertTrue(model.is_fitted())
+        state = model.export_state()
+        self.assertTrue(MAIN.np.allclose(state["coef"], MAIN.np.array([3.0, 4.0])))
+        self.assertAlmostEqual(state["intercept"], 0.2)
+
+    def test_save_trend_model_state_persists_and_prunes(self):
+        model = MAIN.TrendLogisticModel()
+        model.load_state(MAIN.np.array([0.5, -0.5]), 0.1)
+        saved = MAIN.save_trend_model_state(model, max_keep=3)
+        self.assertIsNotNone(saved)
+        self.assertTrue(saved.exists())
+        with MAIN.np.load(saved) as data:
+            self.assertTrue(MAIN.np.allclose(data["coef"], MAIN.np.array([0.5, -0.5])))
+            self.assertAlmostEqual(float(data["intercept"][0]), 0.1)
+        for _ in range(4):
+            MAIN.save_trend_model_state(model, max_keep=3)
+        files = list(self.model_dir.glob("trend_model_*.npz"))
+        self.assertLessEqual(len(files), 3)
 
 
 class EntrySignalIntegrationTests(unittest.TestCase):

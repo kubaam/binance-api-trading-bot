@@ -30,7 +30,7 @@ import math
 import signal
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -86,6 +86,8 @@ load_dotenv()
 SCRIPT_DIR = Path(__file__).resolve().parent
 MODEL_DIR = SCRIPT_DIR / "learning_model"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_FILE_GLOB = "trend_model_*.npz"
+MODEL_STATE_LOCK = threading.Lock()
 
 API_KEY = env_str("BINANCE_API_KEY", "")
 API_SECRET = env_str("BINANCE_API_SECRET", "")
@@ -418,12 +420,14 @@ class TrendLogisticModel:
         else:
             self._model = _MiniLogisticRegression(TREND_ML_LEARNING_RATE, TREND_ML_MAX_ITER)
             self._sklearn = False
+        self._fitted = False
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         if self._sklearn:
             self._model.fit(X, y)
         else:
             self._model.fit(X, y)
+        self._fitted = True
         return self
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
@@ -432,11 +436,43 @@ class TrendLogisticModel:
             return probs[:, 1]
         return self._model.predict_proba(X)
 
+    def is_fitted(self) -> bool:
+        return bool(self._fitted)
+
+    def load_state(self, coef: np.ndarray, intercept: float):
+        coef = np.asarray(coef, dtype=float).reshape(-1)
+        if coef.size == 0:
+            raise ValueError("empty coef")
+        intercept = float(intercept)
+        if self._sklearn:
+            self._model.coef_ = coef.reshape(1, -1)
+            self._model.intercept_ = np.array([intercept], dtype=float)
+            self._model.classes_ = np.array([0, 1], dtype=int)
+            self._model.n_features_in_ = coef.size
+            self._model.n_iter_ = np.array([1], dtype=int)
+        else:
+            self._model.coef_ = coef
+            self._model.intercept_ = intercept
+        self._fitted = True
+
+    def export_state(self) -> Dict[str, Any]:
+        if not self.is_fitted():
+            raise ValueError("Model not fitted")
+        if self._sklearn:
+            coef = np.asarray(self._model.coef_, dtype=float).reshape(-1)
+            intercept_arr = np.asarray(self._model.intercept_, dtype=float).reshape(-1)
+            intercept = float(intercept_arr[0]) if intercept_arr.size else 0.0
+        else:
+            coef = np.asarray(self._model.coef_, dtype=float).reshape(-1)
+            intercept = float(self._model.intercept_)
+        return {"coef": coef, "intercept": intercept}
+
 
 TREND_ML_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 TREND_ML_DATASETS: Dict[Tuple[str, str], Dict[str, Any]] = {}
 TREND_ML_DATA_VERSION = 0
 TREND_ML_REQUIRED_BARS = TREND_ML_LOOKBACK + TREND_ML_MIN_SAMPLES + 1
+TREND_ML_LAST_TRAIN_VERSION = -1
 
 
 def _log_returns(closes: List[float]) -> Optional[np.ndarray]:
@@ -533,7 +569,92 @@ def _aggregate_trend_datasets() -> Optional[Tuple[np.ndarray, np.ndarray]]:
     return X_all, y_all
 
 
+def _sorted_model_files() -> List[Path]:
+    files = [p for p in MODEL_DIR.glob(MODEL_FILE_GLOB) if p.is_file()]
+    files.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+    return files
+
+
+def _latest_model_file() -> Optional[Path]:
+    with MODEL_STATE_LOCK:
+        files = _sorted_model_files()
+        return files[0] if files else None
+
+
+def load_latest_trend_model_state() -> Optional[Tuple[np.ndarray, float]]:
+    path = _latest_model_file()
+    if path is None:
+        return None
+    try:
+        with np.load(path) as data:
+            if "coef" not in data or "intercept" not in data:
+                return None
+            coef = np.asarray(data["coef"], dtype=float).reshape(-1)
+            intercept_arr = np.asarray(data["intercept"], dtype=float).reshape(-1)
+            if coef.size == 0 or intercept_arr.size == 0:
+                return None
+            intercept = float(intercept_arr[0])
+            return coef, intercept
+    except Exception as exc:
+        logging.warning(f"failed to load trend model from {path.name}: {exc}")
+        return None
+
+
+def create_trend_model() -> TrendLogisticModel:
+    model = TrendLogisticModel()
+    loader = getattr(model, "load_state", None)
+    state = load_latest_trend_model_state()
+    if callable(loader) and state is not None:
+        coef, intercept = state
+        try:
+            loader(coef, intercept)
+        except Exception as exc:
+            logging.warning(f"failed to hydrate trend model from disk: {exc}")
+    return model
+
+
+def _prune_old_model_files_locked(max_keep: int) -> None:
+    files = _sorted_model_files()
+    for old in files[max_keep:]:
+        try:
+            old.unlink()
+        except Exception:
+            logging.warning(f"failed to remove stale model file {old}")
+
+
+def save_trend_model_state(model: TrendLogisticModel, max_keep: int = 5) -> Optional[Path]:
+    exporter = getattr(model, "export_state", None)
+    if not callable(exporter):
+        return None
+    try:
+        state = exporter()
+        coef = np.asarray(state.get("coef"), dtype=float).reshape(-1)
+        intercept = float(state.get("intercept"))
+    except Exception as exc:
+        logging.warning(f"failed to export trend model: {exc}")
+        return None
+    if coef.size == 0:
+        logging.warning("refusing to persist empty trend model coefficients")
+        return None
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    path = MODEL_DIR / f"trend_model_{timestamp}.npz"
+    try:
+        payload = {
+            "coef": coef,
+            "intercept": np.array([intercept], dtype=float),
+            "created": np.array([int(time.time())], dtype=int),
+        }
+        with MODEL_STATE_LOCK:
+            np.savez_compressed(path, **payload)
+            _prune_old_model_files_locked(max_keep)
+        return path
+    except Exception as exc:
+        logging.warning(f"failed to persist trend model: {exc}")
+        return None
+
+
 def trend_ml_probability(symbol: str, interval: str, closes: List[float], last_open: int) -> Optional[float]:
+    global TREND_ML_LAST_TRAIN_VERSION
     key = (symbol, interval)
     if len(closes) < TREND_ML_REQUIRED_BARS:
         _update_trend_dataset_store(key, last_open, None)
@@ -563,8 +684,19 @@ def trend_ml_probability(symbol: str, interval: str, closes: List[float], last_o
         return None
     X, y = aggregated
     try:
-        model = TrendLogisticModel()
-        model.fit(X, y)
+        model = create_trend_model()
+        trained_version = TREND_ML_LAST_TRAIN_VERSION
+        need_fit = True
+        checker = getattr(model, "is_fitted", None)
+        if callable(checker):
+            try:
+                need_fit = (not checker()) or trained_version != TREND_ML_DATA_VERSION
+            except Exception:
+                need_fit = True
+        if need_fit:
+            model.fit(X, y)
+            save_trend_model_state(model)
+            TREND_ML_LAST_TRAIN_VERSION = TREND_ML_DATA_VERSION
         latest_window = returns[-TREND_ML_LOOKBACK:]
         features = _feature_vector(latest_window).reshape(1, -1)
         prob = float(model.predict_proba(features)[0])
