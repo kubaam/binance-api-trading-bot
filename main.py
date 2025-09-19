@@ -33,9 +33,16 @@ import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
+
 from dotenv import load_dotenv
 from binance.spot import Spot
 import websocket
+
+try:
+    from sklearn.linear_model import LogisticRegression as _SklearnLogisticRegression
+except Exception:  # pragma: no cover - optional dependency
+    _SklearnLogisticRegression = None
 
 from rich.console import Console
 from rich.table import Table
@@ -103,6 +110,11 @@ MAX_KLINES_PER_TICK = env_int("MAX_KLINES_PER_TICK", 200)
 TUI_REFRESH_HZ = env_int("TUI_REFRESH_HZ", 10)
 INSIGHTS_TOP_N = env_int("INSIGHTS_TOP_N", 5)
 CANCEL_WAIT_SEC = env_int("CANCEL_WAIT_SEC", 4)
+TREND_ML_LOOKBACK = env_int("TREND_ML_LOOKBACK", 10)
+TREND_ML_MIN_SAMPLES = env_int("TREND_ML_MIN_SAMPLES", 60)
+TREND_ML_THRESHOLD = env_float("TREND_ML_THRESHOLD", 0.55)
+TREND_ML_LEARNING_RATE = env_float("TREND_ML_LEARNING_RATE", 0.3)
+TREND_ML_MAX_ITER = env_int("TREND_ML_MAX_ITER", 400)
 
 if not API_KEY or not API_SECRET:
     print("ERROR: Missing BINANCE_API_KEY or BINANCE_API_SECRET in .env", file=sys.stderr)
@@ -347,6 +359,157 @@ def ema(values: List[float], period: int) -> Optional[float]:
         e = (v - e) * k + e
     return e
 
+# ---------------------- trend ML model ----------------------
+class _MiniLogisticRegression:
+    def __init__(self, learning_rate: float, max_iter: int, reg: float = 1e-4, tol: float = 1e-6):
+        self.learning_rate = learning_rate
+        self.max_iter = max_iter
+        self.reg = reg
+        self.tol = tol
+        self.coef_: Optional[np.ndarray] = None
+        self.intercept_: float = 0.0
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y, dtype=float)
+        if X.ndim != 2:
+            raise ValueError("X must be 2D")
+        if X.shape[0] == 0:
+            raise ValueError("empty dataset")
+        w = np.zeros(X.shape[1], dtype=float)
+        b = 0.0
+        rate = max(1e-5, self.learning_rate)
+        for _ in range(self.max_iter):
+            z = X @ w + b
+            z = np.clip(z, -60.0, 60.0)
+            preds = 1.0 / (1.0 + np.exp(-z))
+            error = preds - y
+            grad_w = (X.T @ error) / X.shape[0] + self.reg * w
+            grad_b = float(error.mean())
+            new_w = w - rate * grad_w
+            new_b = b - rate * grad_b
+            if np.linalg.norm(new_w - w) + abs(new_b - b) < self.tol:
+                w, b = new_w, new_b
+                break
+            w, b = new_w, new_b
+        self.coef_ = w
+        self.intercept_ = b
+        return self
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        if self.coef_ is None:
+            raise ValueError("Model not fitted")
+        X = np.asarray(X, dtype=float)
+        z = X @ self.coef_ + self.intercept_
+        z = np.clip(z, -60.0, 60.0)
+        return 1.0 / (1.0 + np.exp(-z))
+
+
+class TrendLogisticModel:
+    def __init__(self):
+        if _SklearnLogisticRegression is not None:
+            self._model = _SklearnLogisticRegression(max_iter=TREND_ML_MAX_ITER, solver="lbfgs")
+            self._sklearn = True
+        else:
+            self._model = _MiniLogisticRegression(TREND_ML_LEARNING_RATE, TREND_ML_MAX_ITER)
+            self._sklearn = False
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        if self._sklearn:
+            self._model.fit(X, y)
+        else:
+            self._model.fit(X, y)
+        return self
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        if self._sklearn:
+            probs = self._model.predict_proba(X)
+            return probs[:, 1]
+        return self._model.predict_proba(X)
+
+
+TREND_ML_CACHE: Dict[Tuple[str, str], Dict[str, Optional[float]]] = {}
+TREND_ML_REQUIRED_BARS = TREND_ML_LOOKBACK + TREND_ML_MIN_SAMPLES + 1
+
+
+def _log_returns(closes: List[float]) -> Optional[np.ndarray]:
+    arr = np.asarray(closes, dtype=float)
+    if arr.size <= TREND_ML_LOOKBACK:
+        return None
+    if np.any(arr <= 0) or not np.all(np.isfinite(arr)):
+        return None
+    returns = np.diff(np.log(arr))
+    if returns.size <= TREND_ML_LOOKBACK:
+        return None
+    if not np.all(np.isfinite(returns)):
+        return None
+    return returns
+
+
+def _feature_vector(window: np.ndarray) -> np.ndarray:
+    mean = float(window.mean())
+    std = float(window.std())
+    if std > 1e-8:
+        scaled = (window - mean) / std
+    else:
+        scaled = window - mean
+    return np.concatenate([scaled, [window.sum(), mean, std]])
+
+
+def _build_trend_dataset(returns: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    X_rows: List[np.ndarray] = []
+    y_rows: List[int] = []
+    for idx in range(TREND_ML_LOOKBACK, len(returns)):
+        window = returns[idx - TREND_ML_LOOKBACK:idx]
+        if window.shape[0] != TREND_ML_LOOKBACK:
+            continue
+        feat = _feature_vector(window)
+        X_rows.append(feat)
+        y_rows.append(1 if returns[idx] > 0 else 0)
+    if len(X_rows) < TREND_ML_MIN_SAMPLES:
+        return None
+    y_arr = np.asarray(y_rows, dtype=int)
+    if np.unique(y_arr).size < 2:
+        return None
+    return np.asarray(X_rows, dtype=float), y_arr
+
+
+def trend_ml_probability(symbol: str, interval: str, closes: List[float], last_open: int) -> Optional[float]:
+    if len(closes) < TREND_ML_REQUIRED_BARS:
+        return None
+    key = (symbol, interval)
+    cached = TREND_ML_CACHE.get(key)
+    if cached and cached.get("last_open") == last_open:
+        return cached.get("prob")
+    returns = _log_returns(closes)
+    if returns is None:
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None}
+        return None
+    dataset = _build_trend_dataset(returns)
+    if dataset is None:
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None}
+        return None
+    X, y = dataset
+    try:
+        model = TrendLogisticModel()
+        model.fit(X, y)
+        latest_window = returns[-TREND_ML_LOOKBACK:]
+        features = _feature_vector(latest_window).reshape(1, -1)
+        prob = float(model.predict_proba(features)[0])
+    except Exception as exc:
+        logging.warning(f"trend_ml_probability training failed for {symbol}:{interval}: {exc}")
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None}
+        return None
+    TREND_ML_CACHE[key] = {"last_open": last_open, "prob": prob}
+    return prob
+
+
+def trend_ml_decision(symbol: str, interval: str, closes: List[float], last_open: int) -> Optional[bool]:
+    prob = trend_ml_probability(symbol, interval, closes, last_open)
+    if prob is None:
+        return None
+    return prob >= TREND_ML_THRESHOLD
+
 # ---------------------- klines + caching ----------------------
 KLINE_CACHE: Dict[Tuple[str, str], Tuple[List[float], List[float], int]] = {}
 
@@ -355,6 +518,7 @@ def recent_klines(symbol: str, interval: str, limit: int) -> List[List]:
 
 def get_cached_klines(symbol: str, interval: str, limit: int) -> Tuple[List[float], List[float], int]:
     key = (symbol, interval)
+    limit = max(2, min(limit, MAX_KLINES_PER_TICK))
     kl = recent_klines(symbol, interval, limit)
     if not kl:
         return [], [], 0
@@ -444,10 +608,13 @@ def compute_regime_proxies():
     REGIME_PROXIES = proxies
 
 def higher_tf_trend_up(symbol: str) -> bool:
-    limit = RSI_PERIOD + 2
-    closes, _, _ = get_cached_klines(symbol, HIGHER_TF, limit)
+    limit = max(RSI_PERIOD + 2, TREND_ML_REQUIRED_BARS)
+    closes, _, last_open = get_cached_klines(symbol, HIGHER_TF, limit)
     r = rsi(closes, RSI_PERIOD) if closes else None
-    return bool(r is not None and r > TREND_RSI_THRESHOLD)
+    if r is None or r <= TREND_RSI_THRESHOLD:
+        return False
+    ml_vote = trend_ml_decision(symbol, HIGHER_TF, closes, last_open)
+    return ml_vote is None or ml_vote
 
 def update_regime() -> Tuple[str, List[Tuple[str, Optional[float]]]]:
     global CURRENT_REGIME, LAST_KNOWN_REGIME
@@ -457,12 +624,16 @@ def update_regime() -> Tuple[str, List[Tuple[str, Optional[float]]]]:
     any_ok = False
     rsi_list: List[Tuple[str, Optional[float]]] = []
     for sym in REGIME_PROXIES:
-        closes, _, _ = get_cached_klines(sym, HIGHER_TF, RSI_PERIOD + 2)
+        closes, _, last_open = get_cached_klines(sym, HIGHER_TF, max(RSI_PERIOD + 2, TREND_ML_REQUIRED_BARS))
         r = rsi(closes, RSI_PERIOD) if closes else None
         rsi_list.append((sym, r))
         if r is None:
             continue
         any_ok = True
+        ml_vote = trend_ml_decision(sym, HIGHER_TF, closes, last_open)
+        if ml_vote is False:
+            downs += 1
+            continue
         if r > TREND_RSI_THRESHOLD:
             ups += 1
         else:
@@ -583,8 +754,8 @@ def sell_all_now(symbol: str) -> bool:
 
 # ---------------------- strategy ----------------------
 def entry_signal(symbol: str) -> bool:
-    limit = max(BREAKOUT_LOOKBACK + 1, EMA_SLOW + 5, RSI_PERIOD + 2)
-    closes, highs, _ = get_cached_klines(symbol, ENTRY_TF, limit)
+    limit = max(BREAKOUT_LOOKBACK + 1, EMA_SLOW + 5, RSI_PERIOD + 2, TREND_ML_REQUIRED_BARS)
+    closes, highs, last_open = get_cached_klines(symbol, ENTRY_TF, limit)
     if len(closes) < limit or len(highs) < limit:
         return False
     r = rsi(closes, RSI_PERIOD)
@@ -594,17 +765,23 @@ def entry_signal(symbol: str) -> bool:
     eslow = ema(closes, EMA_SLOW)
     if efast is None or eslow is None or efast <= eslow:
         return False
+    ml_vote = trend_ml_decision(symbol, ENTRY_TF, closes, last_open)
+    if ml_vote is False:
+        return False
     last_close = closes[-1]
     prior_high = max(highs[-(BREAKOUT_LOOKBACK + 1):-1])
     return last_close > prior_high
 
 def trend_fail_exit(symbol: str) -> bool:
-    limit = max(EMA_SLOW + 5, RSI_PERIOD + 2)
-    closes, _, _ = get_cached_klines(symbol, ENTRY_TF, limit)
+    limit = max(EMA_SLOW + 5, RSI_PERIOD + 2, TREND_ML_REQUIRED_BARS)
+    closes, _, last_open = get_cached_klines(symbol, ENTRY_TF, limit)
     if len(closes) < limit:
         return False
     efast = ema(closes, EMA_FAST)
     eslow = ema(closes, EMA_SLOW)
+    ml_vote = trend_ml_decision(symbol, ENTRY_TF, closes, last_open)
+    if ml_vote is False:
+        return True
     return bool(efast is not None and eslow is not None and efast < eslow)
 
 # ---------------------- state ----------------------
@@ -775,7 +952,14 @@ def summary_view(equity: float, paused: bool, regime_details: List[Tuple[str, Op
     if regime_details:
         chunks = []
         for s, r in regime_details:
-            chunks.append(f"{s}: {'n/a' if r is None else f'{r:.1f}'}")
+            prob = TREND_ML_CACHE.get((s, HIGHER_TF), {}).get("prob")
+            if r is None:
+                label = "n/a"
+            else:
+                label = f"{r:.1f}"
+            if prob is not None:
+                label = f"{label} | ML {prob:.2f}"
+            chunks.append(f"{s}: {label}")
         regime_text.append(", ".join(chunks))
     else:
         regime_text.append("n/a")
