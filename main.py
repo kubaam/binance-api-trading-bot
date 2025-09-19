@@ -30,6 +30,7 @@ import math
 import signal
 import logging
 import threading
+import atexit
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -472,7 +473,7 @@ TREND_ML_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 TREND_ML_DATASETS: Dict[Tuple[str, str], Dict[str, Any]] = {}
 TREND_ML_DATA_VERSION = 0
 TREND_ML_REQUIRED_BARS = TREND_ML_LOOKBACK + TREND_ML_MIN_SAMPLES + 1
-TREND_ML_LAST_TRAIN_VERSION = -1
+TREND_ML_DATA_LOCK = threading.RLock()
 
 
 def _log_returns(closes: List[float]) -> Optional[np.ndarray]:
@@ -519,32 +520,33 @@ def _build_trend_dataset(returns: np.ndarray) -> Optional[Tuple[np.ndarray, np.n
 
 def _update_trend_dataset_store(key: Tuple[str, str], last_open: int, dataset: Optional[Tuple[np.ndarray, np.ndarray]]):
     global TREND_ML_DATA_VERSION
-    prev = TREND_ML_DATASETS.get(key)
-    if dataset is None:
+    with TREND_ML_DATA_LOCK:
+        prev = TREND_ML_DATASETS.get(key)
+        if dataset is None:
+            if prev is not None:
+                TREND_ML_DATASETS.pop(key, None)
+                TREND_ML_DATA_VERSION += 1
+            return
+        X, y = dataset
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y, dtype=int)
+        changed = True
         if prev is not None:
-            TREND_ML_DATASETS.pop(key, None)
+            if (
+                prev.get("last_open") == last_open
+                and isinstance(prev.get("X"), np.ndarray)
+                and isinstance(prev.get("y"), np.ndarray)
+                and prev["X"].shape == X.shape
+                and np.allclose(prev["X"], X)
+                and np.array_equal(prev["y"], y)
+            ):
+                changed = False
+        TREND_ML_DATASETS[key] = {"last_open": last_open, "X": X, "y": y}
+        if changed:
             TREND_ML_DATA_VERSION += 1
-        return
-    X, y = dataset
-    X = np.asarray(X, dtype=float)
-    y = np.asarray(y, dtype=int)
-    changed = True
-    if prev is not None:
-        if (
-            prev.get("last_open") == last_open
-            and isinstance(prev.get("X"), np.ndarray)
-            and isinstance(prev.get("y"), np.ndarray)
-            and prev["X"].shape == X.shape
-            and np.allclose(prev["X"], X)
-            and np.array_equal(prev["y"], y)
-        ):
-            changed = False
-    TREND_ML_DATASETS[key] = {"last_open": last_open, "X": X, "y": y}
-    if changed:
-        TREND_ML_DATA_VERSION += 1
 
 
-def _aggregate_trend_datasets() -> Optional[Tuple[np.ndarray, np.ndarray]]:
+def _aggregate_trend_datasets_unlocked() -> Optional[Tuple[np.ndarray, np.ndarray]]:
     if not TREND_ML_DATASETS:
         return None
     X_list: List[np.ndarray] = []
@@ -567,6 +569,23 @@ def _aggregate_trend_datasets() -> Optional[Tuple[np.ndarray, np.ndarray]]:
     if np.unique(y_all).size < 2:
         return None
     return X_all, y_all
+
+
+def _aggregate_trend_datasets() -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    with TREND_ML_DATA_LOCK:
+        return _aggregate_trend_datasets_unlocked()
+
+
+def _current_trend_data_version() -> int:
+    with TREND_ML_DATA_LOCK:
+        return TREND_ML_DATA_VERSION
+
+
+def _snapshot_trend_datasets() -> Tuple[int, Optional[Tuple[np.ndarray, np.ndarray]]]:
+    with TREND_ML_DATA_LOCK:
+        version = TREND_ML_DATA_VERSION
+        aggregated = _aggregate_trend_datasets_unlocked()
+    return version, aggregated
 
 
 def _sorted_model_files() -> List[Path]:
@@ -653,58 +672,174 @@ def save_trend_model_state(model: TrendLogisticModel, max_keep: int = 5) -> Opti
         return None
 
 
+class TrendModelManager:
+    def __init__(self) -> None:
+        self._model_lock = threading.RLock()
+        self._state_lock = threading.Lock()
+        self._train_event = threading.Event()
+        self._stop_event = threading.Event()
+        try:
+            self._model: Optional[TrendLogisticModel] = create_trend_model()
+        except Exception as exc:
+            logging.warning(f"failed to initialise trend model: {exc}")
+            self._model = None
+        self._trained_version = -1
+        self._target_version = -1
+        self._thread = threading.Thread(
+            target=self._train_loop,
+            name="TrendModelTrainer",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def shutdown(self) -> None:
+        self._stop_event.set()
+        self._train_event.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+
+    def notify_dataset_version(self, version: int) -> None:
+        with self._state_lock:
+            if version <= self._target_version:
+                return
+            self._target_version = version
+        self._train_event.set()
+
+    def ensure_trained(self, version: int, timeout: float = 0.0) -> bool:
+        self.notify_dataset_version(version)
+        if timeout <= 0:
+            return False
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._state_lock:
+                if self._trained_version >= version:
+                    return True
+            time.sleep(0.05)
+        with self._state_lock:
+            return self._trained_version >= version
+
+    def predict_proba(self, features: np.ndarray, required_version: int) -> Optional[float]:
+        with self._state_lock:
+            if self._trained_version < required_version:
+                return None
+        with self._model_lock:
+            model = self._model
+            if model is None:
+                return None
+            checker = getattr(model, "is_fitted", None)
+            if callable(checker) and not checker():
+                return None
+            try:
+                probs = model.predict_proba(features)
+            except Exception as exc:
+                logging.warning(f"trend model prediction failed: {exc}")
+                return None
+        if probs is None:
+            return None
+        probs = np.asarray(probs, dtype=float).reshape(-1)
+        if probs.size == 0 or not np.isfinite(probs[0]):
+            return None
+        return float(probs[0])
+
+    def _train_loop(self) -> None:
+        while not self._stop_event.is_set():
+            triggered = self._train_event.wait(timeout=1.0)
+            if self._stop_event.is_set():
+                break
+            if not triggered:
+                continue
+            self._train_event.clear()
+            self._train_if_needed()
+
+    def _train_if_needed(self) -> None:
+        while not self._stop_event.is_set():
+            with self._state_lock:
+                target_version = self._target_version
+                trained_version = self._trained_version
+            if target_version <= trained_version:
+                return
+            version_snapshot, aggregated = _snapshot_trend_datasets()
+            if aggregated is None or version_snapshot == 0:
+                return
+            X, y = aggregated
+            if X.size == 0 or y.size == 0:
+                return
+            try:
+                new_model = create_trend_model()
+                new_model.fit(X, y)
+                save_trend_model_state(new_model)
+                with self._model_lock:
+                    self._model = new_model
+                with self._state_lock:
+                    self._trained_version = max(self._trained_version, version_snapshot)
+            except Exception as exc:
+                logging.warning(f"trend model training failed: {exc}")
+                time.sleep(0.5)
+                return
+
+
+TREND_MODEL_MANAGER_LOCK = threading.Lock()
+TREND_MODEL_MANAGER: Optional[TrendModelManager] = None
+
+
+def get_trend_model_manager() -> TrendModelManager:
+    global TREND_MODEL_MANAGER
+    with TREND_MODEL_MANAGER_LOCK:
+        if TREND_MODEL_MANAGER is None:
+            TREND_MODEL_MANAGER = TrendModelManager()
+        return TREND_MODEL_MANAGER
+
+
+def _shutdown_trend_model_manager() -> None:
+    manager = TREND_MODEL_MANAGER
+    if manager is not None:
+        manager.shutdown()
+
+
+atexit.register(_shutdown_trend_model_manager)
+
+
 def trend_ml_probability(symbol: str, interval: str, closes: List[float], last_open: int) -> Optional[float]:
-    global TREND_ML_LAST_TRAIN_VERSION
     key = (symbol, interval)
     if len(closes) < TREND_ML_REQUIRED_BARS:
         _update_trend_dataset_store(key, last_open, None)
-        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": TREND_ML_DATA_VERSION}
+        version = _current_trend_data_version()
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": version}
         return None
     cached = TREND_ML_CACHE.get(key)
+    current_version = _current_trend_data_version()
     if (
         cached
         and cached.get("last_open") == last_open
-        and cached.get("version") == TREND_ML_DATA_VERSION
+        and cached.get("version") == current_version
     ):
         return cached.get("prob")
     returns = _log_returns(closes)
     if returns is None:
         _update_trend_dataset_store(key, last_open, None)
-        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": TREND_ML_DATA_VERSION}
+        version = _current_trend_data_version()
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": version}
         return None
     dataset = _build_trend_dataset(returns)
     if dataset is None:
         _update_trend_dataset_store(key, last_open, None)
-        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": TREND_ML_DATA_VERSION}
+        version = _current_trend_data_version()
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": version}
         return None
     _update_trend_dataset_store(key, last_open, dataset)
-    aggregated = _aggregate_trend_datasets()
-    if aggregated is None:
-        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": TREND_ML_DATA_VERSION}
+    data_version = _current_trend_data_version()
+    manager = get_trend_model_manager()
+    manager.ensure_trained(data_version)
+    latest_window = returns[-TREND_ML_LOOKBACK:]
+    features = _feature_vector(latest_window).reshape(1, -1)
+    prob = manager.predict_proba(features, data_version)
+    if prob is None:
+        if manager.ensure_trained(data_version, timeout=0.5):
+            prob = manager.predict_proba(features, data_version)
+    if prob is None:
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": data_version}
         return None
-    X, y = aggregated
-    try:
-        model = create_trend_model()
-        trained_version = TREND_ML_LAST_TRAIN_VERSION
-        need_fit = True
-        checker = getattr(model, "is_fitted", None)
-        if callable(checker):
-            try:
-                need_fit = (not checker()) or trained_version != TREND_ML_DATA_VERSION
-            except Exception:
-                need_fit = True
-        if need_fit:
-            model.fit(X, y)
-            save_trend_model_state(model)
-            TREND_ML_LAST_TRAIN_VERSION = TREND_ML_DATA_VERSION
-        latest_window = returns[-TREND_ML_LOOKBACK:]
-        features = _feature_vector(latest_window).reshape(1, -1)
-        prob = float(model.predict_proba(features)[0])
-    except Exception as exc:
-        logging.warning(f"trend_ml_probability training failed for {symbol}:{interval}: {exc}")
-        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": TREND_ML_DATA_VERSION}
-        return None
-    TREND_ML_CACHE[key] = {"last_open": last_open, "prob": prob, "version": TREND_ML_DATA_VERSION}
+    TREND_ML_CACHE[key] = {"last_open": last_open, "prob": prob, "version": data_version}
     return prob
 
 
