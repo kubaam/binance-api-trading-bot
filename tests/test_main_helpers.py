@@ -3,6 +3,7 @@ import os
 import sys
 import types
 import unittest
+from pathlib import Path
 from typing import List
 from unittest import mock
 
@@ -309,6 +310,13 @@ class TrendMLTests(unittest.TestCase):
         expected_rows = dataset_a[0].shape[0] + dataset_b[0].shape[0]
         trained_rows = second_model.trained[0].shape[0]
         self.assertEqual(trained_rows, expected_rows)
+
+
+class ModelDirectoryTests(unittest.TestCase):
+    def test_learning_model_directory_created_alongside_script(self):
+        expected_dir = Path(MAIN.__file__).resolve().parent / "learning_model"
+        self.assertEqual(MAIN.MODEL_DIR, expected_dir)
+        self.assertTrue(expected_dir.is_dir())
 
 
 class EntrySignalIntegrationTests(unittest.TestCase):
