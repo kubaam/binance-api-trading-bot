@@ -3,7 +3,9 @@ import os
 import sys
 import types
 import unittest
+from typing import List
 from unittest import mock
+
 
 
 class DummySpot:
@@ -233,6 +235,8 @@ class RestCallTests(unittest.TestCase):
 class TrendMLTests(unittest.TestCase):
     def setUp(self):
         MAIN.TREND_ML_CACHE.clear()
+        MAIN.TREND_ML_DATASETS.clear()
+        MAIN.TREND_ML_DATA_VERSION = 0
 
     def test_trend_ml_probability_prefers_uptrend(self):
         required = MAIN.TREND_ML_REQUIRED_BARS + 20
@@ -258,6 +262,53 @@ class TrendMLTests(unittest.TestCase):
     def test_trend_ml_probability_requires_history(self):
         prob = MAIN.trend_ml_probability("SMALLUSDC", MAIN.ENTRY_TF, [100.0, 100.5], last_open=1)
         self.assertIsNone(prob)
+
+    def test_trend_ml_probability_aggregates_across_symbols(self):
+        def build_closes(start: float, deltas: List[float], count: int) -> List[float]:
+            closes = [start]
+            idx = 0
+            while len(closes) < count:
+                closes.append(max(1.0, closes[-1] + deltas[idx % len(deltas)]))
+                idx += 1
+            return closes
+
+        required = MAIN.TREND_ML_REQUIRED_BARS + 10
+        closes_a = build_closes(100.0, [0.6, -0.4, 0.7, -0.2], required)
+        closes_b = build_closes(80.0, [0.5, -0.6, 0.8, -0.3], required)
+
+        class DummyModel:
+            def __init__(self):
+                self.trained = None
+
+            def fit(self, X, y):
+                self.trained = (MAIN.np.array(X, copy=True), MAIN.np.array(y, copy=True))
+                return self
+
+            def predict_proba(self, X):
+                return MAIN.np.array([0.6])
+
+        # Prime dataset for first symbol
+        first_model = DummyModel()
+        with mock.patch.object(MAIN, "TrendLogisticModel", return_value=first_model):
+            prob_a = MAIN.trend_ml_probability("AAAUSDC", MAIN.ENTRY_TF, closes_a, last_open=101)
+        self.assertIsNotNone(prob_a)
+        self.assertIsNotNone(first_model.trained)
+
+        second_model = DummyModel()
+        with mock.patch.object(MAIN, "TrendLogisticModel", return_value=second_model):
+            prob_b = MAIN.trend_ml_probability("BBBUSDC", MAIN.ENTRY_TF, closes_b, last_open=202)
+        self.assertIsNotNone(prob_b)
+        self.assertIsNotNone(second_model.trained)
+
+        returns_a = MAIN._log_returns(closes_a)
+        returns_b = MAIN._log_returns(closes_b)
+        dataset_a = MAIN._build_trend_dataset(returns_a)
+        dataset_b = MAIN._build_trend_dataset(returns_b)
+        self.assertIsNotNone(dataset_a)
+        self.assertIsNotNone(dataset_b)
+        expected_rows = dataset_a[0].shape[0] + dataset_b[0].shape[0]
+        trained_rows = second_model.trained[0].shape[0]
+        self.assertEqual(trained_rows, expected_rows)
 
 
 class EntrySignalIntegrationTests(unittest.TestCase):

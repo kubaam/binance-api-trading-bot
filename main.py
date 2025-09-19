@@ -31,7 +31,7 @@ import signal
 import logging
 import threading
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -428,7 +428,9 @@ class TrendLogisticModel:
         return self._model.predict_proba(X)
 
 
-TREND_ML_CACHE: Dict[Tuple[str, str], Dict[str, Optional[float]]] = {}
+TREND_ML_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
+TREND_ML_DATASETS: Dict[Tuple[str, str], Dict[str, Any]] = {}
+TREND_ML_DATA_VERSION = 0
 TREND_ML_REQUIRED_BARS = TREND_ML_LOOKBACK + TREND_ML_MIN_SAMPLES + 1
 
 
@@ -474,22 +476,87 @@ def _build_trend_dataset(returns: np.ndarray) -> Optional[Tuple[np.ndarray, np.n
     return np.asarray(X_rows, dtype=float), y_arr
 
 
-def trend_ml_probability(symbol: str, interval: str, closes: List[float], last_open: int) -> Optional[float]:
-    if len(closes) < TREND_ML_REQUIRED_BARS:
+def _update_trend_dataset_store(key: Tuple[str, str], last_open: int, dataset: Optional[Tuple[np.ndarray, np.ndarray]]):
+    global TREND_ML_DATA_VERSION
+    prev = TREND_ML_DATASETS.get(key)
+    if dataset is None:
+        if prev is not None:
+            TREND_ML_DATASETS.pop(key, None)
+            TREND_ML_DATA_VERSION += 1
+        return
+    X, y = dataset
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=int)
+    changed = True
+    if prev is not None:
+        if (
+            prev.get("last_open") == last_open
+            and isinstance(prev.get("X"), np.ndarray)
+            and isinstance(prev.get("y"), np.ndarray)
+            and prev["X"].shape == X.shape
+            and np.allclose(prev["X"], X)
+            and np.array_equal(prev["y"], y)
+        ):
+            changed = False
+    TREND_ML_DATASETS[key] = {"last_open": last_open, "X": X, "y": y}
+    if changed:
+        TREND_ML_DATA_VERSION += 1
+
+
+def _aggregate_trend_datasets() -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    if not TREND_ML_DATASETS:
         return None
+    X_list: List[np.ndarray] = []
+    y_list: List[np.ndarray] = []
+    for data in TREND_ML_DATASETS.values():
+        X_arr = data.get("X")
+        y_arr = data.get("y")
+        if not isinstance(X_arr, np.ndarray) or not isinstance(y_arr, np.ndarray):
+            continue
+        if X_arr.size == 0 or y_arr.size == 0:
+            continue
+        X_list.append(X_arr)
+        y_list.append(y_arr)
+    if not X_list:
+        return None
+    X_all = np.vstack(X_list)
+    y_all = np.concatenate(y_list)
+    if X_all.shape[0] < TREND_ML_MIN_SAMPLES:
+        return None
+    if np.unique(y_all).size < 2:
+        return None
+    return X_all, y_all
+
+
+def trend_ml_probability(symbol: str, interval: str, closes: List[float], last_open: int) -> Optional[float]:
     key = (symbol, interval)
+    if len(closes) < TREND_ML_REQUIRED_BARS:
+        _update_trend_dataset_store(key, last_open, None)
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": TREND_ML_DATA_VERSION}
+        return None
     cached = TREND_ML_CACHE.get(key)
-    if cached and cached.get("last_open") == last_open:
+    if (
+        cached
+        and cached.get("last_open") == last_open
+        and cached.get("version") == TREND_ML_DATA_VERSION
+    ):
         return cached.get("prob")
     returns = _log_returns(closes)
     if returns is None:
-        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None}
+        _update_trend_dataset_store(key, last_open, None)
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": TREND_ML_DATA_VERSION}
         return None
     dataset = _build_trend_dataset(returns)
     if dataset is None:
-        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None}
+        _update_trend_dataset_store(key, last_open, None)
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": TREND_ML_DATA_VERSION}
         return None
-    X, y = dataset
+    _update_trend_dataset_store(key, last_open, dataset)
+    aggregated = _aggregate_trend_datasets()
+    if aggregated is None:
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": TREND_ML_DATA_VERSION}
+        return None
+    X, y = aggregated
     try:
         model = TrendLogisticModel()
         model.fit(X, y)
@@ -498,9 +565,9 @@ def trend_ml_probability(symbol: str, interval: str, closes: List[float], last_o
         prob = float(model.predict_proba(features)[0])
     except Exception as exc:
         logging.warning(f"trend_ml_probability training failed for {symbol}:{interval}: {exc}")
-        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None}
+        TREND_ML_CACHE[key] = {"last_open": last_open, "prob": None, "version": TREND_ML_DATA_VERSION}
         return None
-    TREND_ML_CACHE[key] = {"last_open": last_open, "prob": prob}
+    TREND_ML_CACHE[key] = {"last_open": last_open, "prob": prob, "version": TREND_ML_DATA_VERSION}
     return prob
 
 
