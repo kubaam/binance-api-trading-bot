@@ -230,5 +230,56 @@ class RestCallTests(unittest.TestCase):
         self.assertEqual(call_counter["count"], MAIN.REST_RETRIES)
 
 
+class TrendMLTests(unittest.TestCase):
+    def setUp(self):
+        MAIN.TREND_ML_CACHE.clear()
+
+    def test_trend_ml_probability_prefers_uptrend(self):
+        required = MAIN.TREND_ML_REQUIRED_BARS + 20
+        price = 100.0
+        closes = [price]
+        pattern = [0.8, -0.3, 0.9, -0.2, 1.0, -0.1]
+        idx = 0
+        while len(closes) < required:
+            delta = pattern[idx % len(pattern)]
+            price = max(1.0, price + delta)
+            closes.append(price)
+            idx += 1
+        prob = MAIN.trend_ml_probability("TESTUSDC", MAIN.ENTRY_TF, closes, last_open=123456)
+        self.assertIsNotNone(prob)
+        self.assertGreater(prob, 0.5)
+
+    def test_trend_ml_probability_requires_mixed_classes(self):
+        MAIN.TREND_ML_CACHE.clear()
+        closes = [100.0 + 0.5 * i for i in range(MAIN.TREND_ML_REQUIRED_BARS + 5)]
+        prob = MAIN.trend_ml_probability("ONEUSDC", MAIN.ENTRY_TF, closes, last_open=789)
+        self.assertIsNone(prob)
+
+    def test_trend_ml_probability_requires_history(self):
+        prob = MAIN.trend_ml_probability("SMALLUSDC", MAIN.ENTRY_TF, [100.0, 100.5], last_open=1)
+        self.assertIsNone(prob)
+
+
+class EntrySignalIntegrationTests(unittest.TestCase):
+    def test_entry_signal_respects_ml_gate(self):
+        limit = MAIN.TREND_ML_REQUIRED_BARS + 5
+        closes = [float(i + 1) for i in range(limit)]
+        highs = list(closes)
+
+        def ema_side_effect(values, period):
+            if period == MAIN.EMA_FAST:
+                return 110.0
+            if period == MAIN.EMA_SLOW:
+                return 100.0
+            return 100.0
+
+        with mock.patch.object(MAIN, "get_cached_klines", return_value=(closes, highs, 999)), \
+             mock.patch.object(MAIN, "rsi", return_value=MAIN.MOMENTUM_RSI_THRESHOLD + 5), \
+             mock.patch.object(MAIN, "ema", side_effect=ema_side_effect):
+            with mock.patch.object(MAIN, "trend_ml_decision", return_value=False):
+                self.assertFalse(MAIN.entry_signal("XYZUSDC"))
+            with mock.patch.object(MAIN, "trend_ml_decision", return_value=True):
+                self.assertTrue(MAIN.entry_signal("XYZUSDC"))
+
 if __name__ == "__main__":
     unittest.main()
